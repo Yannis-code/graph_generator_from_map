@@ -87,7 +87,7 @@ class _CarteState extends State<Carte> {
           color: Colors.red,
           strokeWidth: 2.0,
         );
-        Marker end = makeArrow(connectedLatLng);
+        Marker end = makeArrow(loadedLatLng, connectedLatLng);
         markers.add(end);
         endMarkers.add(end);
         polylines.add(poly);
@@ -115,6 +115,10 @@ class _CarteState extends State<Carte> {
 
   double degreesToRadians(double degrees) {
     return degrees * pi / 180;
+  }
+
+  double radianToDegree(double radian) {
+    return radian * 180 / pi;
   }
 
   double dist(LatLng latLong1, LatLng latLong2) {
@@ -159,7 +163,7 @@ class _CarteState extends State<Carte> {
             String key = "${pt1.latitude}, ${pt1.longitude}";
             String value = "${pt2.latitude}, ${pt2.longitude}, $distance";
             String key2 = "${pt2.latitude}, ${pt2.longitude}";
-            Marker end = makeArrow(pt2);
+            Marker end = makeArrow(pt1, pt2);
 
             if (_jsonToOutput[key] != []) {
               if (_jsonToOutput[key].contains(value)) {
@@ -201,6 +205,7 @@ class _CarteState extends State<Carte> {
       setState(() {
         _markers = [];
         _polylines = [];
+        _endMarkers = [];
       });
     }
   }
@@ -219,11 +224,15 @@ class _CarteState extends State<Carte> {
     );
   }
 
-  Marker makeArrow(LatLng latLong) {
+  Marker makeArrow(LatLng latLong1, LatLng latLong2) {
+    double latDist = (latLong2.latitude - latLong1.latitude);
+    double lonDist = (latLong2.longitude - latLong1.longitude);
+    double endLat = latDist * 0.9 + latLong1.latitude;
+    double endLon = lonDist * 0.9 + latLong1.longitude;
     return Marker(
       width: 10,
       height: 10,
-      point: latLong,
+      point: LatLng(endLat, endLon),
       builder: (contex) => const Icon(
         Icons.circle,
         size: 10,
@@ -348,18 +357,16 @@ class _CarteState extends State<Carte> {
   }
 
   Widget markerLayer() {
-    return GestureDetector(
-        child: MarkerLayerWidget(
-            options: MarkerLayerOptions(
+    return MarkerLayerWidget(
+        options: MarkerLayerOptions(
       markers: _markers,
-    )));
+    ));
   }
 
   Widget endMarkerLayer() {
-    return GestureDetector(
-        child: MarkerLayerWidget(
-            options: MarkerLayerOptions(
+    return MarkerLayerWidget(
+        options: MarkerLayerOptions(
       markers: _endMarkers,
-    )));
+    ));
   }
 }
