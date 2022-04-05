@@ -5,6 +5,7 @@ import 'dart:convert';
 class FileManager {
   static Future<String> getLocalPath() async {
     final applicationDirectory = await getApplicationDocumentsDirectory();
+    print(applicationDirectory.path);
 
     return applicationDirectory.path;
   }

@@ -60,11 +60,32 @@ class _CarteState extends State<Carte> {
   List<Marker> _endMarkers = [];
   List<Polyline> _polylines = [];
   String _action = "";
-  bool _drawing = false;
-  Map<String, dynamic> _jsonToOutput = {};
 
-  // Déclaration de la table de hashage de popup pour les markers
-  final LinkedHashMap _popupLabels = LinkedHashMap<int, String>();
+  double degreesToRadians(double degrees) {
+    return degrees * pi / 180;
+  }
+
+  double dist(LatLng latLong1, LatLng latLong2) {
+    double earthRadiusKm = 6371;
+    double latDif = degreesToRadians(latLong2.latitude - latLong1.latitude);
+    double lonDif = degreesToRadians(latLong2.longitude - latLong1.longitude);
+
+    double lat1 = degreesToRadians(latLong1.latitude);
+    double lat2 = degreesToRadians(latLong2.latitude);
+
+    double a = sin(latDif / 2) * sin(latDif / 2) +
+        cos(lat1) * cos(lat2) * sin(lonDif / 2) * sin(lonDif / 2);
+    double c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return earthRadiusKm * c;
+  }
+
+  LatLng getArrowPos(LatLng latLong1, LatLng latLong2) {
+    double latDist = (latLong2.latitude - latLong1.latitude);
+    double lonDist = (latLong2.longitude - latLong1.longitude);
+    double endLat = latDist * 0.9 + latLong1.latitude;
+    double endLon = lonDist * 0.9 + latLong1.longitude;
+    return LatLng(endLat, endLon);
+  }
 
   Future<void> loadJson() async {
     Map<dynamic, dynamic> load = await FileManager.loadFromFile();
@@ -83,12 +104,11 @@ class _CarteState extends State<Carte> {
             double.parse(connectedCoord[0]), double.parse(connectedCoord[1]));
         markers.add(makeMarker(loadedLatLng));
         Polyline poly = Polyline(
-          points: [connectedLatLng, loadedLatLng],
+          points: [loadedLatLng, connectedLatLng],
           color: Colors.red,
-          strokeWidth: 2.0,
+          strokeWidth: 1.5,
         );
         Marker end = makeArrow(loadedLatLng, connectedLatLng);
-        markers.add(end);
         endMarkers.add(end);
         polylines.add(poly);
       }
@@ -98,6 +118,31 @@ class _CarteState extends State<Carte> {
       _endMarkers = endMarkers;
       _polylines = polylines;
     });
+  }
+
+  void saveJson() {
+    Map<String, dynamic> output = {};
+    for (var poly in _polylines) {
+      LatLng start = poly.points.first;
+      LatLng end = poly.points.last;
+
+      String startString = "${start.latitude}, ${start.longitude}";
+      String endString = "${end.latitude}, ${end.longitude}";
+      double distance = dist(start, end);
+
+      String value = "${end.latitude}, ${end.longitude}, $distance";
+
+      if (!output.containsKey(startString)) {
+        output[startString] = [];
+      }
+      if (!output.containsKey(endString)) {
+        output[endString] = [];
+      }
+      if (!output[startString].contains(value)) {
+        output[startString].add(value);
+      }
+    }
+    FileManager.writeToFile(output);
   }
 
   // Initialisation des state du widget
@@ -111,28 +156,6 @@ class _CarteState extends State<Carte> {
   @override
   void dispose() {
     super.dispose();
-  }
-
-  double degreesToRadians(double degrees) {
-    return degrees * pi / 180;
-  }
-
-  double radianToDegree(double radian) {
-    return radian * 180 / pi;
-  }
-
-  double dist(LatLng latLong1, LatLng latLong2) {
-    double earthRadiusKm = 6371;
-    double latDif = degreesToRadians(latLong2.latitude - latLong1.latitude);
-    double lonDif = degreesToRadians(latLong2.longitude - latLong1.longitude);
-
-    double lat1 = degreesToRadians(latLong1.latitude);
-    double lat2 = degreesToRadians(latLong2.latitude);
-
-    double a = sin(latDif / 2) * sin(latDif / 2) +
-        cos(lat1) * cos(lat2) * sin(lonDif / 2) * sin(lonDif / 2);
-    double c = 2 * atan2(sqrt(a), sqrt(1 - a));
-    return earthRadiusKm * c;
   }
 
   void _handleClick(TapPosition tapPos, LatLng latLong) {
@@ -153,33 +176,23 @@ class _CarteState extends State<Carte> {
         });
       }
     } else if (_action == "route") {
-      if (_drawing) {
+      if (_polylines.last.points.length < 2) {
         for (var marker in _markers) {
           if (dist(latLong, marker.point) <= 0.003) {
             LatLng pt1 = _polylines.last.points[0];
             LatLng pt2 = marker.point;
-            double distance = dist(pt1, pt2);
-
-            String key = "${pt1.latitude}, ${pt1.longitude}";
-            String value = "${pt2.latitude}, ${pt2.longitude}, $distance";
-            String key2 = "${pt2.latitude}, ${pt2.longitude}";
             Marker end = makeArrow(pt1, pt2);
 
-            if (_jsonToOutput[key] != []) {
-              if (_jsonToOutput[key].contains(value)) {
-                _polylines.removeLast();
-                break;
-              }
+            if (_polylines.last.points.first == pt2) {
+              _polylines.removeLast();
+              break;
             }
+
             setState(() {
-              if (!_jsonToOutput.containsKey(key2)) {
-                _jsonToOutput[key2] = [];
-              }
-              _jsonToOutput[key].add(value);
-              _polylines.last.points.add(marker.point);
+              _polylines.last.points.add(pt2);
               _endMarkers.add(end);
-              _drawing = false;
             });
+            break;
           }
         }
       } else {
@@ -188,25 +201,49 @@ class _CarteState extends State<Carte> {
             Polyline poly = Polyline(
               points: [marker.point],
               color: Colors.red,
-              strokeWidth: 2.0,
+              strokeWidth: 1.5,
             );
-            String key = "${marker.point.latitude}, ${marker.point.longitude}";
             setState(() {
-              if (!_jsonToOutput.containsKey(key)) {
-                _jsonToOutput[key] = [];
-              }
               _polylines.add(poly);
-              _drawing = true;
             });
+            break;
           }
         }
       }
     } else if (_action == "delete") {
-      setState(() {
-        _markers = [];
-        _polylines = [];
-        _endMarkers = [];
-      });
+      LatLng matchingPoint = latLong;
+      bool hasMatchingPoint = false;
+      for (var marker in _markers) {
+        if (dist(latLong, marker.point) <= 0.003) {
+          hasMatchingPoint = true;
+          matchingPoint = marker.point;
+          break;
+        }
+      }
+      if (hasMatchingPoint) {
+        List<Polyline> polyToRemove = [];
+
+        for (var poly in _polylines) {
+          if (poly.points[0] == matchingPoint) {
+            polyToRemove.add(poly);
+            _endMarkers.removeWhere((element) =>
+                element.point == getArrowPos(poly.points[0], poly.points[1]));
+          } else if (poly.points[1] == matchingPoint) {
+            polyToRemove.add(poly);
+            _endMarkers.removeWhere((element) =>
+                element.point == getArrowPos(poly.points[0], poly.points[1]));
+          }
+        }
+        for (var poly in polyToRemove) {
+          _polylines.remove(poly);
+        }
+        _markers.removeWhere((element) => element.point == matchingPoint);
+        setState(() {
+          _polylines;
+          _endMarkers;
+          _markers;
+        });
+      }
     }
   }
 
@@ -218,21 +255,17 @@ class _CarteState extends State<Carte> {
       builder: (contex) => const Icon(
         Icons.clear,
         size: 30,
-        color: Color.fromARGB(255, 0, 73, 133),
+        color: Color.fromARGB(255, 0, 0, 0),
       ),
       anchorPos: AnchorPos.align(AnchorAlign.center),
     );
   }
 
   Marker makeArrow(LatLng latLong1, LatLng latLong2) {
-    double latDist = (latLong2.latitude - latLong1.latitude);
-    double lonDist = (latLong2.longitude - latLong1.longitude);
-    double endLat = latDist * 0.9 + latLong1.latitude;
-    double endLon = lonDist * 0.9 + latLong1.longitude;
     return Marker(
       width: 10,
       height: 10,
-      point: LatLng(endLat, endLon),
+      point: getArrowPos(latLong1, latLong2),
       builder: (contex) => const Icon(
         Icons.circle,
         size: 10,
@@ -256,61 +289,143 @@ class _CarteState extends State<Carte> {
             right: 10,
             child: Column(
               mainAxisAlignment: MainAxisAlignment.end,
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Padding(
-                    padding: const EdgeInsets.all(5),
-                    child: Container(
-                      color: Colors.white,
-                      child: Text(_action),
-                    )),
-                Padding(
-                    padding: const EdgeInsets.all(5),
-                    child: FloatingActionButton(
-                      backgroundColor: Colors.blue,
-                      child: const Icon(Icons.location_on),
-                      onPressed: () => setState(() {
-                        _action = _action == "marker" ? "" : "marker";
-                      }),
-                    )),
-                Padding(
-                    padding: const EdgeInsets.all(5),
-                    child: FloatingActionButton(
-                      backgroundColor: Colors.green,
-                      child: const Icon(Icons.route),
-                      onPressed: () => setState(() {
-                        if (_action == "route") {
-                          _action = "";
-                          _drawing = false;
-                        } else {
-                          _action = "route";
-                        }
-                      }),
-                    )),
-                Padding(
-                    padding: const EdgeInsets.all(5),
-                    child: FloatingActionButton(
-                      backgroundColor: Colors.red,
-                      child: const Icon(Icons.delete),
-                      onPressed: () => setState(() {
-                        _action = _action == "delete" ? "" : "delete";
-                      }),
-                    )),
-                Padding(
-                    padding: const EdgeInsets.all(5),
-                    child: FloatingActionButton(
-                      backgroundColor: Colors.orange,
-                      child: const Icon(Icons.save),
-                      onPressed: () => setState(() {
-                        FileManager.writeToFile(_jsonToOutput);
-                      }),
-                    )),
-                Padding(
-                  padding: const EdgeInsets.all(5),
-                  child: FloatingActionButton(
-                      backgroundColor: Colors.purple,
-                      child: const Icon(Icons.refresh),
-                      onPressed: loadJson),
-                )
+                Row(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(5),
+                      child: Container(
+                        color: const Color.fromARGB(220, 255, 255, 255),
+                        child: const Text(
+                          "Placer un point",
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 10,
+                          ),
+                        ),
+                      )
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(5),
+                      child: FloatingActionButton(
+                        backgroundColor: Colors.blue,
+                        child: const Icon(Icons.location_on),
+                        onPressed: () => setState(() {
+                          _action = _action == "marker" ? "" : "marker";
+                        }),
+                      )
+                    )
+                  ],
+                ),
+                Row(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(5),
+                      child: Container(
+                        color: const Color.fromARGB(220, 255, 255, 255),
+                        child: const Text(
+                          "Créer une route",
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 10,
+                          ),
+                        ),
+                      )
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(5),
+                      child: FloatingActionButton(
+                        backgroundColor: Colors.green,
+                        child: const Icon(Icons.route),
+                        onPressed: () => setState(() {
+                          if (_action == "route") {
+                            _action = "";
+                          } else {
+                            _action = "route";
+                          }
+                        }),
+                      )
+                    )
+                  ],
+                ),
+                Row(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(5),
+                      child: Container(
+                        color: const Color.fromARGB(220, 255, 255, 255),
+                        child: const Text(
+                          "Supprimer un point"
+                          ,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 10,
+                          ),
+                        ),
+                      )
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(5),
+                      child: FloatingActionButton(
+                        backgroundColor: Colors.red,
+                        child: const Icon(Icons.delete),
+                        onPressed: () => setState(() {
+                          _action = _action == "delete" ? "" : "delete";
+                        }),
+                      )
+                    )
+                  ],
+                ),
+                Row(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(5),
+                      child: Container(
+                        color: const Color.fromARGB(220, 255, 255, 255),
+                        child: const Text(
+                          "Sauvegarder",
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 10,
+                          ),
+                        ),
+                      )
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(5),
+                      child: FloatingActionButton(
+                        backgroundColor: Colors.orange,
+                        child: const Icon(Icons.save),
+                        onPressed: saveJson,
+                      )
+                    )
+                  ],
+                ),
+                Row(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(5),
+                      child: Container(
+                        color: const Color.fromARGB(220, 255, 255, 255),
+                        child: const Text(
+                          "Charger",
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 10,
+                          ),
+                        ),
+                      )
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(5),
+                      child: FloatingActionButton(
+                          backgroundColor: Colors.purple,
+                          child: const Icon(Icons.refresh),
+                          onPressed: loadJson),
+                    )
+                  ],
+                ),
               ],
             ),
           )
