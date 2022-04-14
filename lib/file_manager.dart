@@ -1,36 +1,38 @@
 import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart';
 import 'dart:io';
 import 'dart:convert';
 
 class FileManager {
+  /// Return the path of the application
   static Future<String> getLocalPath() async {
     final applicationDirectory = await getApplicationDocumentsDirectory();
-    print(applicationDirectory.path);
+    String path = join(applicationDirectory.path, "generated");
 
-    return applicationDirectory.path;
+    return path;
   }
 
-  static Future<File> getLocalFile() async {
+  static Future<File> getLocalFile(String file) async {
     final path = await getLocalPath();
 
-    return File('$path/outputGraph.json');
+    return File('$path/$file');
   }
 
-  static Future<void> writeToFile(Map<dynamic, dynamic> jsonToSave) async {
-    File F = await getLocalFile();
+  static Future<void> writeToFile(String file, dynamic jsonToSave) async {
+    File F = await getLocalFile(file);
 
     // Write the file
     String text = json.encode(jsonToSave);
-    File result = await F.writeAsString('$text');
-    print("Writting Done!");
+    await F.writeAsString(text);
+    print("Saved: $file");
   }
 
-  static Future<Map<dynamic, dynamic>> loadFromFile() async {
-    File F = await getLocalFile();
+  static Future<dynamic> loadFromFile(String file) async {
+    File F = await getLocalFile(file);
 
     String text = await F.readAsString();
-    Map<dynamic, dynamic> map = json.decode(text);
-    print("Reading Done!");
+    dynamic map = json.decode(text);
+    print("Opened: $file");
     return map;
   }
 }
