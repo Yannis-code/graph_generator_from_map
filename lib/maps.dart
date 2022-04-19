@@ -25,6 +25,7 @@ import 'dart:async';
 // package:google_polyline_algorithm   -> Désencodage de polyline de guidage
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:path_generator/floyd_warshall.dart';
 import 'package:path_generator/routing_service.dart';
 import 'package:path_generator/widgets/markers.dart';
 import 'package:positioned_tap_detector_2/positioned_tap_detector_2.dart';
@@ -56,19 +57,28 @@ class Carte extends StatefulWidget {
 
 // Classe de la map affichée
 class _CarteState extends State<Carte> {
+  final Map minSpaceMap = {
+    "generic": 0.003,
+    "parking": 0.003,
+    "door": 0.0015,
+    "classroom": 0.001,
+  };
+
   // Déclaration des listes d'objet à afficher sur la map
   List<Polygon> _polygons = [];
-
-  List<Marker> _globalMarkers = [];
-  List<Marker> _parkingMarkers = [];
-  List<Marker> _doorMarkers = [];
-  List<List<dynamic>> _classroomMarkers = [];
+  List<dynamic> _markers = [];
+  List<Marker> _markersList = [];
   List<Marker> _directionMarkers = [];
   List<Polyline> _polylines = [];
   bool _showPolygons = false;
+
   final ValueNotifier<String> _action = ValueNotifier("");
-  final ValueNotifier<String> _markerType = ValueNotifier("");
+  final ValueNotifier<String> _markerType = ValueNotifier("generic");
+  final ValueNotifier<String> _routeType = ValueNotifier("");
   TextEditingController markerLabelController = TextEditingController();
+
+  late final MapController mapController;
+  double rotation = 0.0;
 
   var overlayImages = <OverlayImage>[
     OverlayImage(
@@ -145,23 +155,47 @@ class _CarteState extends State<Carte> {
     return earthRadiusKm * c;
   }
 
-  Future<void> loadJson() async {
-    List<Marker> globalMarkers = [];
-    List<Marker> parking =
-        await loadMarkerList(globalMarkers, "parking", "hashParking.json");
-    List<Marker> door =
-        await loadMarkerList(globalMarkers, "door", "hashDoor.json");
-    List<Marker> generic =
-        await loadMarkerList(globalMarkers, "generic", "hashGeneric.json");
+  Marker getClosest(Marker marker, List<Marker> markers) {
+    Marker closest = markers[0];
+    for (var mark in markers) {
+      if (dist(marker.point, mark.point) < dist(marker.point, closest.point)) {
+        closest = mark;
+      }
+    }
+    return closest;
+  }
 
-    List<List<dynamic>> inside = [];
+  Future<void> loadJson() async {
+    List<dynamic> markerss = [];
+    List<Marker> markersGlobal = [];
+
+    List<Marker> parking =
+        await loadMarkerList(markersGlobal, "parking", "hashParking.json");
+    for (var marker in parking) {
+      markerss.add(["parking", marker, {}]);
+    }
+    List<Marker> door =
+        await loadMarkerList(markersGlobal, "door", "hashDoor.json");
+    for (var marker in door) {
+      markerss.add(["door", marker, {}]);
+    }
+    List<Marker> generic =
+        await loadMarkerList(markersGlobal, "generic", "hashGeneric.json");
+    for (var marker in generic) {
+      markerss.add(["generic", marker, {}]);
+    }
+
     List<dynamic> loadInside =
         await FileManager.loadFromFile("hashInsideMarker.json");
     for (var classroom in loadInside) {
       LatLng classroomLatLng = LatLng(classroom[0][0], classroom[0][1]);
       Marker marker = MarkerMaker.makeInside(classroomLatLng);
-      globalMarkers.add(marker);
-      inside.add([marker, classroom[1]]);
+      markerss.add([
+        "classroom",
+        marker,
+        {"name": classroom[1]}
+      ]);
+      markersGlobal.add(marker);
     }
 
     List<Marker> endMarkers = [];
@@ -172,9 +206,7 @@ class _CarteState extends State<Carte> {
       LatLng loadedLatLng =
           LatLng(double.parse(keyVal[0]), double.parse(keyVal[1]));
       for (var connected in load[key]) {
-        List<String> connectedCoord = connected.split(", ");
-        LatLng connectedLatLng = LatLng(
-            double.parse(connectedCoord[0]), double.parse(connectedCoord[1]));
+        LatLng connectedLatLng = LatLng(connected[0], connected[1]);
         Polyline poly = Polyline(
           points: [loadedLatLng, connectedLatLng],
           color: Colors.red,
@@ -186,17 +218,15 @@ class _CarteState extends State<Carte> {
       }
     }
     setState(() {
-      _classroomMarkers = inside;
-      _globalMarkers = globalMarkers;
+      _markers = markerss;
+      _markersList = markersGlobal;
       _directionMarkers = endMarkers;
       _polylines = polylines;
-      _parkingMarkers = parking;
-      _doorMarkers = door;
     });
   }
 
   Future<List<Marker>> loadMarkerList(
-      List<Marker> globalList, String type, String path) async {
+      List<dynamic> globalList, String type, String path) async {
     List<dynamic> data = await FileManager.loadFromFile(path);
     List<Marker> markers = [];
     for (var loadedMarker in data) {
@@ -219,7 +249,7 @@ class _CarteState extends State<Carte> {
     return markers;
   }
 
-  void saveJson() {
+  Future<void> saveJson() async {
     Map<String, dynamic> graph = {};
     Set<List<double>> parkingMarkers = {};
     Set<List<dynamic>> classroomMarkers = {};
@@ -236,32 +266,23 @@ class _CarteState extends State<Carte> {
       String endString = "${end.latitude}, ${end.longitude}";
       double distance = dist(start, end);
 
-      String value = "${end.latitude}, ${end.longitude}, $distance";
+      List<double> value = [end.latitude, end.longitude, distance];
 
       if (!graph.containsKey(startString)) {
-        bool markerGeneric = true;
         graph[startString] = [];
-        if (_parkingMarkers.any((element) => element.point == start)) {
+        var matching = _markers.firstWhere((element) {
+          return element[1].point == start;
+        });
+        if (matching[0] == "parking") {
           parkingMarkers.add([start.latitude, start.longitude]);
-          markerGeneric = false;
-        } else if (_doorMarkers.any((element) => element.point == start)) {
+        } else if (matching[0] == "door") {
           doorMarkers.add([start.latitude, start.longitude]);
-          markerGeneric = false;
-        } else {
-          for (var classroom in _classroomMarkers) {
-            if (classroom[0].point == start) {
-              classroomMarkers.add(
-                [
-                  [start.latitude, start.longitude],
-                  classroom[1]
-                ],
-              );
-              markerGeneric = false;
-              break;
-            }
-          }
-        }
-        if (markerGeneric) {
+        } else if (matching[0] == "classroom") {
+          classroomMarkers.add([
+            [start.latitude, start.longitude],
+            matching[2]["name"]
+          ]);
+        } else if (matching[0] == "generic") {
           genericMarkers.add([start.latitude, start.longitude]);
         }
         if (Routing.isInsidePolygons(_polygons, start)) {
@@ -272,29 +293,20 @@ class _CarteState extends State<Carte> {
         allMarkers.add([start.latitude, start.longitude]);
       }
       if (!graph.containsKey(endString)) {
-        bool markerGeneric = true;
         graph[endString] = [];
-        if (_parkingMarkers.any((element) => element.point == end)) {
+        var matching = _markers.firstWhere((element) {
+          return element[1].point == end;
+        });
+        if (matching[0] == "parking") {
           parkingMarkers.add([end.latitude, end.longitude]);
-          markerGeneric = false;
-        } else if (_doorMarkers.any((element) => element.point == end)) {
+        } else if (matching[0] == "door") {
           doorMarkers.add([end.latitude, end.longitude]);
-          markerGeneric = false;
-        } else {
-          for (var classroom in _classroomMarkers) {
-            if (classroom[0].point == end) {
-              classroomMarkers.add(
-                [
-                  [end.latitude, end.longitude],
-                  classroom[1]
-                ],
-              );
-              markerGeneric = false;
-              break;
-            }
-          }
-        }
-        if (markerGeneric) {
+        } else if (matching[0] == "classroom") {
+          classroomMarkers.add([
+            [end.latitude, end.longitude],
+            matching[2]["name"]
+          ]);
+        } else if (matching[0] == "generic") {
           genericMarkers.add([end.latitude, end.longitude]);
         }
         if (Routing.isInsidePolygons(_polygons, end)) {
@@ -308,14 +320,15 @@ class _CarteState extends State<Carte> {
         graph[startString].add(value);
       }
     }
-    FileManager.writeToFile("hashInside.json", insideMarkers.toList());
-    FileManager.writeToFile("hashOutside.json", outsideMarkers.toList());
-    FileManager.writeToFile("hashParking.json", parkingMarkers.toList());
-    FileManager.writeToFile("hashGeneric.json", genericMarkers.toList());
-    FileManager.writeToFile("hashInsideMarker.json", classroomMarkers.toList());
-    FileManager.writeToFile("hashDoor.json", doorMarkers.toList());
-    FileManager.writeToFile("hashGlobal.json", allMarkers.toList());
-    FileManager.writeToFile("graph.json", graph);
+    await FileManager.writeToFile("hashInside.json", insideMarkers.toList());
+    await FileManager.writeToFile("hashOutside.json", outsideMarkers.toList());
+    await FileManager.writeToFile("hashParking.json", parkingMarkers.toList());
+    await FileManager.writeToFile("hashGeneric.json", genericMarkers.toList());
+    await FileManager.writeToFile(
+        "hashInsideMarker.json", classroomMarkers.toList());
+    await FileManager.writeToFile("hashDoor.json", doorMarkers.toList());
+    await FileManager.writeToFile("hashGlobal.json", allMarkers.toList());
+    await FileManager.writeToFile("graph.json", graph);
   }
 
   // Initialisation des state du widget
@@ -323,6 +336,7 @@ class _CarteState extends State<Carte> {
   void initState() {
     super.initState();
     _buildPolygons();
+    mapController = MapController();
   }
 
   // Fermeture des Stream de control lorsque la Carte n'est plus affichée
@@ -334,73 +348,117 @@ class _CarteState extends State<Carte> {
   void _handleClick(TapPosition tapPos, LatLng latLong) {
     print(latLong);
     if (_action.value == "marker") {
-      if (_markerType.value == "parking") {
-        _handleParking(tapPos, latLong);
-      }
-      if (_markerType.value == "door") {
-        _handleDoor(tapPos, latLong);
-      }
-      if (_markerType.value == "inside") {
-        _handleInside(tapPos, latLong);
-      }
-      if (_markerType.value == "") {
-        _handleGenericMarker(tapPos, latLong);
+      bool markerAdded = !_markers.any((element) {
+        return element[0] == _markerType.value &&
+            dist(latLong, element[1].point) < minSpaceMap[_markerType.value];
+      });
+
+      
+      if (markerAdded) {
+        bool labelSet = true;
+        late Marker marker;
+        Map options = {};
+        if (_markerType.value == "parking") {
+          marker = MarkerMaker.makeParkingMarker(latLong);
+        } else if (_markerType.value == "door") {
+          marker = MarkerMaker.makeDoor(latLong);
+        } else if (_markerType.value == "classroom") {
+          if (markerLabelController.text == "") {
+            print("Classroom name can not be empty");
+            labelSet = false;
+          }
+          marker = MarkerMaker.makeInside(latLong);
+          options = {"name": markerLabelController.text};
+        } else if (_markerType.value == "generic") {
+          marker = MarkerMaker.makeMarker(latLong);
+        }
+        if (labelSet) {
+          setState(() {
+            _markersList.add(marker);
+            _markers.add([_markerType.value, marker, options]);
+          });
+        }
+      } else {
+        print(
+            "Marker of type '${_markerType.value}' too from $latLong (<${minSpaceMap[_markerType.value] * 1000}m)");
       }
     } else if (_action.value == "route") {
-      if (_polylines.last.points.length < 2) {
-        for (var marker in _globalMarkers) {
-          if (dist(latLong, marker.point) <= 0.003) {
-            LatLng pt1 = _polylines.last.points[0];
-            LatLng pt2 = marker.point;
+      if (_polylines.isNotEmpty && _polylines.last.points.length < 2) {
+        if (_markersList.isNotEmpty) {
+          Marker test = MarkerMaker.makeMarker(latLong);
+          Marker closest = getClosest(test, _markersList);
+          if (dist(closest.point, latLong) < minSpaceMap["generic"]) {
+            LatLng pt1 = _polylines.last.points.first;
+            LatLng pt2 = closest.point;
             Marker end = MarkerMaker.makeArrow(pt1, pt2);
 
             if (_polylines.last.points.first == pt2) {
               _polylines.removeLast();
-              break;
-            }
+            } else {
+              late Polyline poly;
+              late Marker end2;
+              if (_routeType.value != "oriented") {
+                poly = Polyline(
+                  points: [pt2, pt1],
+                  color: Colors.red,
+                  strokeWidth: 1.5,
+                );
+                end2 = MarkerMaker.makeArrow(pt2, pt1);
+              }
 
-            setState(() {
-              _polylines.last.points.add(pt2);
-              _directionMarkers.add(end);
-            });
-            break;
+              setState(() {
+                _polylines.last.points.add(pt2);
+                _directionMarkers.add(end);
+                if (_routeType.value != "oriented") {
+                  _polylines.add(poly);
+                  _directionMarkers.add(end2);
+                }
+              });
+            }
           }
         }
       } else {
-        for (var marker in _globalMarkers) {
-          if (dist(latLong, marker.point) <= 0.003) {
+        if (_markersList.isNotEmpty) {
+          Marker test = MarkerMaker.makeMarker(latLong);
+          Marker closest = getClosest(test, _markersList);
+          if (dist(closest.point, latLong) < minSpaceMap["generic"]) {
             Polyline poly = Polyline(
-              points: [marker.point],
+              points: [closest.point],
               color: Colors.red,
               strokeWidth: 1.5,
             );
             setState(() {
               _polylines.add(poly);
             });
-            break;
           }
         }
       }
     } else if (_action.value == "delete") {
-      LatLng matchingPoint = latLong;
-      bool hasMatchingPoint = false;
-      for (var marker in _globalMarkers) {
-        if (dist(latLong, marker.point) <= 0.003) {
-          hasMatchingPoint = true;
-          matchingPoint = marker.point;
-          break;
-        }
+      Marker marker = MarkerMaker.makeMarker(latLong);
+      var closest = _markers.firstWhere(
+        (element) {
+          return dist(latLong, element[1].point) < 0.003;
+        },
+        orElse: () => [],
+      );
+      if (closest != []) {
+        setState(() {
+          _markersList.removeWhere((element) {
+            return element.point == closest[1].point;
+          });
+          _markers.removeWhere((element) => element == closest);
+        });
       }
-      if (hasMatchingPoint) {
+      if (closest != []) {
         List<Polyline> polyToRemove = [];
-
+        Marker closestMarker = closest[1];
         for (var poly in _polylines) {
-          if (poly.points[0] == matchingPoint) {
+          if (poly.points[0] == closestMarker.point) {
             polyToRemove.add(poly);
             _directionMarkers.removeWhere((element) =>
                 element.point ==
                 MarkerMaker.getArrowPos(poly.points[0], poly.points[1]));
-          } else if (poly.points[1] == matchingPoint) {
+          } else if (poly.points[1] == closestMarker.point) {
             polyToRemove.add(poly);
             _directionMarkers.removeWhere((element) =>
                 element.point ==
@@ -410,84 +468,10 @@ class _CarteState extends State<Carte> {
         for (var poly in polyToRemove) {
           _polylines.remove(poly);
         }
-        _globalMarkers.removeWhere((element) => element.point == matchingPoint);
         setState(() {
           _polylines;
-          _directionMarkers;
-          _globalMarkers;
-        });
-      }
-    }
-  }
-
-  void _handleGenericMarker(TapPosition tapPos, LatLng latLong) {
-    bool markerAdded = true;
-    Marker marker = MarkerMaker.makeMarker(latLong);
-    for (var marker in _globalMarkers) {
-      if (dist(latLong, marker.point) <= 0.003) {
-        print("Marker already set at ${marker.point}");
-        markerAdded = false;
-        break;
-      }
-    }
-    if (markerAdded) {
-      setState(() {
-        _globalMarkers.add(marker);
-      });
-    }
-  }
-
-  void _handleParking(TapPosition tapPos, LatLng latLong) {
-    bool markerAdded = true;
-    Marker marker = MarkerMaker.makeParkingMarker(latLong);
-    for (var marker in _globalMarkers) {
-      if (dist(latLong, marker.point) <= 0.003) {
-        print("Marker already set at ${marker.point}");
-        markerAdded = false;
-        break;
-      }
-    }
-    if (markerAdded) {
-      setState(() {
-        _globalMarkers.add(marker);
-        _parkingMarkers.add(marker);
-      });
-    }
-  }
-
-  void _handleDoor(TapPosition tapPos, LatLng latLong) {
-    bool markerAdded = true;
-    Marker marker = MarkerMaker.makeDoor(latLong);
-    for (var marker in _globalMarkers) {
-      if (dist(latLong, marker.point) <= 0.003) {
-        print("Marker already set at ${marker.point}");
-        markerAdded = false;
-        break;
-      }
-    }
-    if (markerAdded) {
-      setState(() {
-        _globalMarkers.add(marker);
-        _doorMarkers.add(marker);
-      });
-    }
-  }
-
-  void _handleInside(TapPosition tapPos, LatLng latLong) {
-    if (markerLabelController.text != "") {
-      bool markerAdded = true;
-      Marker marker = MarkerMaker.makeInside(latLong);
-      for (var marker in _globalMarkers) {
-        if (dist(latLong, marker.point) <= 0.003) {
-          print("Marker already set at ${marker.point}");
-          markerAdded = false;
-          break;
-        }
-      }
-      if (markerAdded) {
-        setState(() {
-          _globalMarkers.add(marker);
-          _classroomMarkers.add([marker, markerLabelController.text]);
+          _markersList;
+          _markers;
         });
       }
     }
@@ -590,6 +574,18 @@ class _CarteState extends State<Carte> {
                     backgroundColor: Colors.purple,
                   ),
                 ),
+                Padding(
+                  padding: const EdgeInsets.all(5),
+                  child: FloatingActionButton.extended(
+                    onPressed: () async {
+                      await saveJson();
+                      await FloydWarshall.compute();
+                    },
+                    label: const Text("Calculer"),
+                    icon: const Icon(Icons.computer),
+                    backgroundColor: Colors.indigo,
+                  ),
+                ),
               ],
             ),
           ),
@@ -611,9 +607,9 @@ class _CarteState extends State<Carte> {
                               icon: const Icon(Icons.house),
                               onPressed: () {
                                 _markerType.value =
-                                    (_markerType.value == "inside")
-                                        ? ""
-                                        : "inside";
+                                    (_markerType.value == "classroom")
+                                        ? "generic"
+                                        : "classroom";
                               },
                               label: const Text("Marker intérieur")),
                         ),
@@ -624,7 +620,9 @@ class _CarteState extends State<Carte> {
                               icon: const Icon(Icons.door_front_door),
                               onPressed: () {
                                 _markerType.value =
-                                    (_markerType.value == "door") ? "" : "door";
+                                    (_markerType.value == "door")
+                                        ? "generic"
+                                        : "door";
                               },
                               label: const Text("Marker de Portes")),
                         ),
@@ -639,7 +637,7 @@ class _CarteState extends State<Carte> {
                               onPressed: () {
                                 _markerType.value =
                                     (_markerType.value == "parking")
-                                        ? ""
+                                        ? "generic"
                                         : "parking";
                               },
                               label: const Text(
@@ -651,16 +649,56 @@ class _CarteState extends State<Carte> {
                         ),
                       ],
                     );
+                  } else if (value == "route") {
+                    return Column(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.all(5),
+                          child: FloatingActionButton.extended(
+                              backgroundColor: Colors.green,
+                              icon: const Icon(Icons.arrow_right_alt),
+                              onPressed: () {
+                                _routeType.value =
+                                    (_routeType.value == "oriented")
+                                        ? ""
+                                        : "oriented";
+                              },
+                              label: const Text("Route orienté")),
+                        ),
+                      ],
+                    );
                   }
                   return const SizedBox.shrink();
                 }),
+          ),
+          Positioned(
+            top: 10,
+            right: 10,
+            child: Container(
+              height: 50,
+              width: 500,
+              color: Colors.white,
+              child: Slider(
+                value: rotation,
+                min: 0.0,
+                max: 360,
+                onChanged: (degree) {
+                  setState(() {
+                    rotation = degree;
+                  });
+                  mapController.rotate(degree);
+                },
+              ),
+            ),
           ),
           Align(
             alignment: Alignment.bottomCenter,
             child: ValueListenableBuilder<String>(
                 valueListenable: _markerType,
                 builder: (context, value, _) {
-                  if (value == "inside") {
+                  if (value == "classroom") {
                     return SizedBox(
                       width: 400,
                       height: 50,
@@ -735,6 +773,38 @@ class _CarteState extends State<Carte> {
                                 )));
                       },
                     );
+                  } else if (value == "route") {
+                    return ValueListenableBuilder<String>(
+                      valueListenable: _routeType,
+                      builder: (context, type, _) {
+                        if (type != "") {
+                          return Container(
+                              color: Colors.white,
+                              child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      vertical: 10, horizontal: 20),
+                                  child: Text(
+                                    type,
+                                    style: const TextStyle(
+                                      fontSize: 30,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  )));
+                        }
+                        return Container(
+                            color: Colors.white,
+                            child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 10, horizontal: 20),
+                                child: Text(
+                                  value,
+                                  style: const TextStyle(
+                                    fontSize: 30,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                )));
+                      },
+                    );
                   }
                   if (value != "") {
                     return Container(
@@ -763,17 +833,19 @@ class _CarteState extends State<Carte> {
   // Construction du Widget de la carte
   Widget map() {
     return FlutterMap(
+      mapController: mapController,
       options: MapOptions(
         center: LatLng(widget.center[0], widget.center[1]),
         zoom: widget.startZoom,
-        maxZoom: 20.0,
+        maxZoom: 23.0,
         minZoom: 5,
         onTap: _handleClick,
       ),
       children: [
         tileLayer(),
-        AlainDelpuch(),
+        //info(),
         if (_showPolygons) polygonLayer(),
+        alainDelpuch(),
         polylineLayer(),
         endMarkerLayer(),
         markerLayer(),
@@ -789,24 +861,42 @@ class _CarteState extends State<Carte> {
   // Construction du Widget correspondant aux tiles de la carte
   Widget tileLayer() {
     return TileLayerWidget(
-      options: TileLayerOptions(
+        options: TileLayerOptions(
+      tileSize: 256,
       maxZoom: 20,
       urlTemplate: "https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png",
       subdomains: ['a', 'b', 'c'],
     ));
   }
 
-  Widget AlainDelpuch() {
+  Widget alainDelpuch() {
     return TileLayerWidget(
-      options: TileLayerOptions(
-        maxZoom: 20,
-        tileProvider: const AssetTileProvider(),
-        urlTemplate: "assets/Test/{z}/{x}/{y}.png",
-        errorImage: const AssetImage("assets/errorTile.png"),
-        backgroundColor: Colors.transparent,
-      )
-    );
+        options: TileLayerOptions(
+      tileSize: 256,
+      minZoom: 20,
+      maxZoom: 23,
+      urlTemplate: "https://perso.isima.fr/~yaroche1/tiles/{z}_{x}_{y}.png",
+      backgroundColor: Colors.transparent,
+    ));
   }
+
+  /* Widget info() {
+    return TileLayerWidget(
+        options: TileLayerOptions(
+            tileSize: 250,
+            maxZoom: 20,
+            urlTemplate:
+                "https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png",
+            subdomains: ['a', 'b', 'c'],
+            backgroundColor: Colors.transparent,
+            tileBuilder: (context, _, tile) {
+              return Container(
+                decoration: BoxDecoration(
+                    border: Border.all(color: Colors.red, width: 1.0)),
+                child: Text("${tile.coords.z},   ${tile.coords.x},   ${tile.coords.y}"),
+              );
+            }));
+  } */
 
   // Construction du Widget correspondant aux polylines de la carte
   Widget polylineLayer() {
@@ -820,7 +910,7 @@ class _CarteState extends State<Carte> {
   Widget markerLayer() {
     return MarkerLayerWidget(
         options: MarkerLayerOptions(
-      markers: _globalMarkers,
+      markers: _markersList,
     ));
   }
 
