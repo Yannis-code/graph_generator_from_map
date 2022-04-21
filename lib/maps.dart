@@ -4,14 +4,12 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/gestures.dart';
 
 // Import des packages dart utiles pour les usage d'une carte
 //
 // dart:collection -> Fonctions de hashage
 // dart:convert    -> Conversion des fichiers locaux
 // dart:async      -> StreamControl
-import 'dart:collection';
 import 'dart:convert';
 import 'dart:async';
 
@@ -29,11 +27,7 @@ import 'package:path_generator/floyd_warshall.dart';
 import 'package:path_generator/routing_service.dart';
 import 'package:path_generator/widgets/markers.dart';
 import 'package:positioned_tap_detector_2/positioned_tap_detector_2.dart';
-import 'package:flutter_map_marker_popup/flutter_map_marker_popup.dart';
-import 'package:latlong2/latlong.dart';
 import 'package:path_generator/file_manager.dart';
-
-import 'package:provider/provider.dart';
 
 class Carte extends StatefulWidget {
   final double startZoom;
@@ -68,11 +62,16 @@ class _CarteState extends State<Carte> {
   // Déclaration des listes d'objet à afficher sur la map
   List<Polygon> _polygons = [];
 
-  Map<String, List<dynamic>> _stages = {
-    "0": [<Polyline>[], <Marker>[], <dynamic>[]],
-    "1": [<Polyline>[], <Marker>[], <dynamic>[]],
-    "2": [<Polyline>[], <Marker>[], <dynamic>[]],
-    "3": [<Polyline>[], <Marker>[], <dynamic>[]],
+  Map<String, dynamic> currentPoly = {};
+
+  Map<String, dynamic> _stages = {
+    "0": {"polylines": <dynamic>[], "markers": <dynamic>[]},
+    "0.5": {"polylines": <dynamic>[], "markers": <dynamic>[]},
+    "1": {"polylines": <dynamic>[], "markers": <dynamic>[]},
+    "1.5": {"polylines": <dynamic>[], "markers": <dynamic>[]},
+    "2": {"polylines": <dynamic>[], "markers": <dynamic>[]},
+    "2.5": {"polylines": <dynamic>[], "markers": <dynamic>[]},
+    "3": {"polylines": <dynamic>[], "markers": <dynamic>[]},
   };
   bool _showPolygons = false;
 
@@ -155,7 +154,8 @@ class _CarteState extends State<Carte> {
   dynamic getClosestMarkers(LatLng latLng, List<dynamic> markers) {
     dynamic closest = markers[0];
     for (var mark in markers) {
-      if (dist(latLng, mark[1].point) < dist(latLng, closest[1].point)) {
+      if (dist(latLng, mark["marker"].point) <
+          dist(latLng, closest["marker"].point)) {
         closest = mark;
       }
     }
@@ -163,11 +163,14 @@ class _CarteState extends State<Carte> {
   }
 
   Future<void> loadJson() async {
-    Map<String, List<dynamic>> stages = {
-      "0": [<Polyline>[], <Marker>[], <dynamic>[]],
-      "1": [<Polyline>[], <Marker>[], <dynamic>[]],
-      "2": [<Polyline>[], <Marker>[], <dynamic>[]],
-      "3": [<Polyline>[], <Marker>[], <dynamic>[]],
+    Map<String, dynamic> stages = {
+      "0": {"polylines": <dynamic>[], "markers": <dynamic>[]},
+      "0.5": {"polylines": <dynamic>[], "markers": <dynamic>[]},
+      "1": {"polylines": <dynamic>[], "markers": <dynamic>[]},
+      "1.5": {"polylines": <dynamic>[], "markers": <dynamic>[]},
+      "2": {"polylines": <dynamic>[], "markers": <dynamic>[]},
+      "2.5": {"polylines": <dynamic>[], "markers": <dynamic>[]},
+      "3": {"polylines": <dynamic>[], "markers": <dynamic>[]},
     };
 
     Map<dynamic, dynamic> load = await FileManager.loadFromFile("graph.json");
@@ -188,13 +191,22 @@ class _CarteState extends State<Carte> {
           color: Colors.red,
           strokeWidth: 1.5,
         );
-        MarkerMaker.getMarker(startLatLng, options["type"]);
-        stages["${options['floor']}"]?[1]
-            .add(MarkerMaker.makeArrow(startLatLng, endLatLng));
-        stages["${options['floor']}"]?[0].add(poly);
+
+        Map<String, dynamic> polyOptions = {"type": ""};
+        if (options["type"] == "stairs" && connectionOpt["type"] == "stairs") {
+          polyOptions["type"] = "stairs";
+        }
+
+        stages["${options['floor']}"]?["polylines"].add({
+          "polyline": poly,
+          "pointer": MarkerMaker.makeArrow(startLatLng, endLatLng),
+          "options": polyOptions,
+        });
       }
-      Marker marker = MarkerMaker.getMarker(startLatLng, options["type"]);
-      stages["${options['floor']}"]?[2].add([options, marker]);
+      stages["${options['floor']}"]?["markers"].add({
+        "marker": MarkerMaker.getMarker(startLatLng, options["type"]),
+        "options": options,
+      });
     }
     setState(() {
       _stages = stages;
@@ -215,12 +227,12 @@ class _CarteState extends State<Carte> {
 
     for (var key in _stages.keys) {
       if (key != "global") {
-        for (var poly in _stages[key]?[0]) {
-          LatLng start = poly.points.first;
-          LatLng end = poly.points.last;
+        for (var poly in _stages[key]?["polylines"]) {
+          LatLng start = poly["polyline"].points.first;
+          LatLng end = poly["polyline"].points.last;
 
-          var endPoint = _stages[key]?[2].firstWhere((element) {
-            return element[1].point == end;
+          var endPoint = _stages[key]?["markers"].firstWhere((element) {
+            return element["marker"].point == end;
           });
 
           String startString = "${start.latitude}, ${start.longitude}";
@@ -228,60 +240,60 @@ class _CarteState extends State<Carte> {
           double distance = dist(start, end);
 
           Map<String, dynamic> value = {
-            "options": endPoint[0],
+            "options": endPoint["options"],
             "point": [end.latitude, end.longitude]
           };
           value["options"]["distance"] = distance;
 
           if (!graph.containsKey(startString)) {
             graph[startString] = {"options": {}, "connections": []};
-            var matching = _stages[key]?[2].firstWhere((element) {
-              return element[1].point == start;
+            var matching = _stages[key]?["markers"].firstWhere((element) {
+              return element["marker"].point == start;
             });
-            outputs[matching[0]["type"]]?.add([
-              matching[0],
+            outputs[matching["options"]["type"]]?.add([
+              matching["options"],
               [start.latitude, start.longitude]
             ]);
             if (Routing.isInsidePolygons(_polygons, start)) {
               outputs["inside"]?.add([
-                matching[0],
+                matching["options"],
                 [start.latitude, start.longitude]
               ]);
             } else {
               outputs["outside"]?.add([
-                matching[0],
+                matching["options"],
                 [start.latitude, start.longitude]
               ]);
             }
-            graph[startString]["options"] = matching[0];
+            graph[startString]["options"] = matching["options"];
             outputs["global"]?.add([
-              matching[0],
+              matching["options"],
               [start.latitude, start.longitude]
             ]);
           }
           if (!graph.containsKey(endString)) {
             graph[endString] = {"options": {}, "connections": []};
-            var matching = _stages[key]?[2].firstWhere((element) {
-              return element[1].point == end;
+            var matching = _stages[key]?["markers"].firstWhere((element) {
+              return element["marker"].point == end;
             });
-            outputs[matching[0]["type"]]?.add([
-              matching[0],
+            outputs[matching["options"]["type"]]?.add([
+              matching["options"],
               [end.latitude, end.longitude]
             ]);
             if (Routing.isInsidePolygons(_polygons, end)) {
               outputs["inside"]?.add([
-                matching[0],
+                matching["options"],
                 [end.latitude, end.longitude]
               ]);
             } else {
               outputs["outside"]?.add([
-                matching[0],
+                matching["options"],
                 [end.latitude, end.longitude]
               ]);
             }
-            graph[endString]["options"] = matching[0];
+            graph[endString]["options"] = matching["options"];
             outputs["global"]?.add([
-              matching[0],
+              matching["options"],
               [end.latitude, end.longitude]
             ]);
           }
@@ -304,6 +316,14 @@ class _CarteState extends State<Carte> {
     super.initState();
     _buildPolygons();
     mapController = MapController();
+    currentPoly = {
+      "polyline": Polyline(
+        points: [],
+        color: Colors.red,
+        strokeWidth: 1.5,
+      ),
+      "options": {},
+    };
   }
 
   // Fermeture des Stream de control lorsque la Carte n'est plus affichée
@@ -313,11 +333,16 @@ class _CarteState extends State<Carte> {
   }
 
   void _handleClick(TapPosition tapPos, LatLng latLong) {
-    print(latLong);
     if (_action.value == "marker") {
-      bool markerAdded = !_stages["$_floor"]?[2].any((element) {
-        return element[0]["type"] == _markerType.value &&
-            dist(latLong, element[1].point) < minSpaceMap[_markerType.value];
+      // TODO: Tester si le marker est un escalier et alors:
+      //    - qu'il soit possible de target un escalier (uniquement) de niv +0.5 +1
+      //    - puis créer le polyline à la couche actuelle
+      //    - l'escalier doit alors avoir un float associé indiquant sont z
+      //    - niveaux en 0.5 vraiment necessaires?
+      bool markerAdded = !_stages["$_floor"]?["markers"].any((element) {
+        return element["options"]["type"] == _markerType.value &&
+            dist(latLong, element["marker"].point) <
+                minSpaceMap[_markerType.value];
       });
 
       if (markerAdded) {
@@ -326,46 +351,37 @@ class _CarteState extends State<Carte> {
         Map options = {};
         options["floor"] = _floor;
         options["type"] = _markerType.value;
-        if (_markerType.value == "parking") {
-          marker = MarkerMaker.makeParkingMarker(latLong);
-        } else if (_markerType.value == "door") {
-          marker = MarkerMaker.makeDoor(latLong);
-        } else if (_markerType.value == "classroom") {
+        marker = MarkerMaker.getMarker(latLong, _markerType.value);
+        if (_markerType.value == "classroom") {
           if (markerLabelController.text == "") {
-            print("Classroom name can not be empty");
+            debugPrint("Classroom name can not be empty");
             labelSet = false;
+          } else {
+            options["name"] = markerLabelController.text;
           }
-          marker = MarkerMaker.makeInside(latLong);
-          options["name"] = markerLabelController.text;
-        } else if (_markerType.value == "stairs") {
-          marker = MarkerMaker.makeStairs(latLong);
-        } else if (_markerType.value == "generic") {
-          marker = MarkerMaker.makeMarker(latLong);
         }
 
         if (labelSet) {
           setState(() {
-            _stages["$_floor"]?[2].add([options, marker]);
+            _stages["$_floor"]?["markers"]
+                .add({"options": options, "marker": marker});
           });
         }
       } else {
-        print(
+        debugPrint(
             "Marker of type '${_markerType.value}' too from $latLong (<${minSpaceMap[_markerType.value] * 1000}m)");
       }
     } else if (_action.value == "route") {
-      if (_stages["$_floor"]?[0].isNotEmpty &&
-          _stages["$_floor"]?[0].last.points.length < 2) {
-        if (_stages["$_floor"]?[2].isNotEmpty) {
-          dynamic closest = getClosestMarkers(latLong, _stages["$_floor"]?[2]);
-          if (dist(closest[1].point, latLong) <
-              minSpaceMap[closest[0]["type"]]) {
-            LatLng pt1 = _stages["$_floor"]?[0].last.points.first;
-            LatLng pt2 = closest[1].point;
-            Marker end = MarkerMaker.makeArrow(pt1, pt2);
+      if (currentPoly["polyline"].points.isNotEmpty) {
+        if (_stages["$_floor"]?["markers"].isNotEmpty) {
+          dynamic closest =
+              getClosestMarkers(latLong, _stages["$_floor"]?["markers"]);
+          if (dist(closest["marker"].point, latLong) <
+              minSpaceMap[closest["options"]["type"]]) {
+            LatLng pt1 = currentPoly["polyline"].points.first;
+            LatLng pt2 = closest["marker"].point;
 
-            if (pt1 == pt2) {
-              _stages["$_floor"]?[0].removeLast();
-            } else {
+            if (pt1 != pt2) {
               late Polyline poly;
               late Marker end2;
               if (_routeType.value != "oriented") {
@@ -376,55 +392,66 @@ class _CarteState extends State<Carte> {
                 );
                 end2 = MarkerMaker.makeArrow(pt2, pt1);
               }
+              currentPoly["polyline"].points.add(pt2);
+              Marker pointer = MarkerMaker.makeArrow(pt1, pt2);
+              Map<String, dynamic> options = {"type": ""};
+              if (currentPoly["options"]["type"] == "stairs" &&
+                  closest["options"]["type"] == "stairs") {
+                options["type"] = "stairs";
+              }
 
               setState(() {
-                _stages["$_floor"]?[0].last.points.add(pt2);
-                _stages["$_floor"]?[1].add(end);
+                currentPoly;
+                _stages["$_floor"]?["polylines"].add({
+                  "polyline": currentPoly["polyline"],
+                  "options": options,
+                  "pointer": pointer
+                });
                 if (_routeType.value != "oriented") {
-                  _stages["$_floor"]?[0].add(poly);
-                  _stages["$_floor"]?[1].add(end2);
+                  _stages["$_floor"]?["polylines"].add(
+                      {"polyline": poly, "options": options, "pointer": end2});
                 }
               });
             }
+            currentPoly = {
+              "polyline": Polyline(
+                points: [],
+                color: Colors.red,
+                strokeWidth: 1.5,
+              ),
+              "options": {},
+            };
           }
         }
       } else {
-        if (_stages["$_floor"]?[2].isNotEmpty) {
-          dynamic closest = getClosestMarkers(latLong, _stages["$_floor"]?[2]);
-          if (dist(closest[1].point, latLong) <
-              minSpaceMap[closest[0]["type"]]) {
-            Polyline poly = Polyline(
-              points: [closest[1].point],
-              color: Colors.red,
-              strokeWidth: 1.5,
-            );
-            setState(() {
-              _stages["$_floor"]?[0].add(poly);
-            });
+        if (_stages["$_floor"]?["markers"].isNotEmpty) {
+          dynamic closest =
+              getClosestMarkers(latLong, _stages["$_floor"]?["markers"]);
+          if (dist(closest["marker"].point, latLong) <
+              minSpaceMap[closest["options"]["type"]]) {
+            currentPoly["polyline"].points.add(closest["marker"].point);
+            currentPoly["options"] = closest["options"];
           }
         }
       }
     } else if (_action.value == "delete") {
-      dynamic closest = getClosestMarkers(latLong, _stages["$_floor"]?[2]);
-      if (dist(latLong, closest[1].point) < minSpaceMap[closest[0]["type"]]) {
-        List<Polyline> polyToRemove = [];
-        for (var poly in _stages["$_floor"]?[0]) {
-          if (poly.points[0] == closest[1].point) {
+      dynamic closest =
+          getClosestMarkers(latLong, _stages["$_floor"]?["markers"]);
+      if (dist(latLong, closest["marker"].point) <
+          minSpaceMap[closest["options"]["type"]]) {
+        List<dynamic> polyToRemove = [];
+        for (var poly in _stages["$_floor"]?["polylines"]) {
+          if (poly["polyline"].points[0] == closest["marker"].point) {
             polyToRemove.add(poly);
-            _stages["$_floor"]?[1].remove(
-                MarkerMaker.getArrowPos(poly.points[0], poly.points[1]));
-          } else if (poly.points[1] == closest[1].point) {
+          } else if (poly["polyline"].points[1] == closest["marker"].point) {
             polyToRemove.add(poly);
-            _stages["$_floor"]?[1].remove(
-                MarkerMaker.getArrowPos(poly.points[0], poly.points[1]));
           }
         }
         for (var poly in polyToRemove) {
-          _stages["$_floor"]?[0].remove(poly);
+          _stages["$_floor"]?["polylines"].remove(poly);
         }
         setState(() {
-          _stages["$_floor"]?[2].remove(closest);
-          _stages["$_floor"]?[2].removeWhere((element) => element == closest);
+          _stages["$_floor"]?["markers"].remove(closest);
         });
       }
     }
@@ -497,7 +524,6 @@ class _CarteState extends State<Carte> {
                               setState(() {
                                 _floor = newVal ?? _floor;
                               });
-                              ;
                             }),
                       ],
                     ),
@@ -846,9 +872,8 @@ class _CarteState extends State<Carte> {
       ),
       children: [
         tileLayer(),
-        if (false) info(),
         if (_showPolygons) polygonLayer(),
-        alainDelpuch(),
+        plan(),
         polylineLayer(),
         endMarkerLayer(),
         markerLayer(),
@@ -867,7 +892,7 @@ class _CarteState extends State<Carte> {
     ));
   }
 
-  Widget alainDelpuch() {
+  Widget plan() {
     return TileLayerWidget(
         options: TileLayerOptions(
       tileSize: 256,
@@ -878,43 +903,73 @@ class _CarteState extends State<Carte> {
     ));
   }
 
-  Widget info() {
-    return TileLayerWidget(
-        options: TileLayerOptions(
-            tileSize: 250,
-            maxZoom: 20,
-            urlTemplate:
-                "https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png",
-            subdomains: ['a', 'b', 'c'],
-            backgroundColor: Colors.transparent,
-            tileBuilder: (context, _, tile) {
-              return Container(
-                decoration: BoxDecoration(
-                    border: Border.all(color: Colors.red, width: 1.0)),
-                child: Text(
-                    "${tile.coords.z},   ${tile.coords.x},   ${tile.coords.y}"),
-              );
-            }));
+  List<Polyline> getPolylinesToDisplay() {
+    List<Polyline> polylines = _stages["$_floor"]?["polylines"]
+        .map<Polyline>((e) => e["polyline"] as Polyline)
+        .toList();
+    if (_floor < 3) {
+      polylines += _stages["${_floor + 0.5}"]?["polylines"]
+          .where((e) => e["options"]["type"] == "stairs")
+          .map<Polyline>((e) => e["polyline"] as Polyline)
+          .toList();
+      polylines += _stages["${_floor + 1}"]?["polylines"]
+          .where((e) => e["options"]["type"] == "stairs")
+          .map<Polyline>((e) => e["polyline"] as Polyline)
+          .toList();
+    }
+    return polylines;
   }
 
   // Construction du Widget correspondant aux polylines de la carte
   Widget polylineLayer() {
     return PolylineLayerWidget(
-      options: PolylineLayerOptions(polylines: _stages["$_floor"]?[0]),
+      options: PolylineLayerOptions(polylines: getPolylinesToDisplay()),
     );
+  }
+
+  List<Marker> getMarkersToDisplay() {
+    List<Marker> markers = _stages["$_floor"]?["markers"]
+        .map<Marker>((e) => e["marker"] as Marker)
+        .toList();
+    if (_floor < 3) {
+      markers += _stages["${_floor + 0.5}"]?["markers"]
+          .where((e) => e["options"]["type"] == "stairs")
+          .map<Marker>((e) => e["marker"] as Marker)
+          .toList();
+      markers += _stages["${_floor + 1}"]?["markers"]
+          .where((e) => e["options"]["type"] == "stairs")
+          .map<Marker>((e) => e["marker"] as Marker)
+          .toList();
+    }
+    return markers;
   }
 
   Widget markerLayer() {
     return MarkerLayerWidget(
-        options: MarkerLayerOptions(
-      markers: _stages["$_floor"]?[2].map<Marker>((e) => e[1] as Marker).toList(),
-    ));
+        options: MarkerLayerOptions(markers: getMarkersToDisplay()));
+  }
+
+  List<Marker> getPointersToDisplay() {
+    List<Marker> pointers = _stages["$_floor"]?["polylines"]
+        .map<Marker>((e) => e["pointer"] as Marker)
+        .toList();
+    if (_floor < 3) {
+      pointers += _stages["${_floor + 0.5}"]?["polylines"]
+          .where((e) => e["options"]["type"] == "stairs")
+          .map<Marker>((e) => e["pointer"] as Marker)
+          .toList();
+      pointers += _stages["${_floor + 1}"]?["polylines"]
+          .where((e) => e["options"]["type"] == "stairs")
+          .map<Marker>((e) => e["pointer"] as Marker)
+          .toList();
+    }
+    return pointers;
   }
 
   Widget endMarkerLayer() {
     return MarkerLayerWidget(
         options: MarkerLayerOptions(
-      markers: _stages["$_floor"]?[1],
+      markers: getPointersToDisplay(),
     ));
   }
 

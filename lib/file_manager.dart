@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart';
 import 'dart:io';
@@ -24,7 +25,7 @@ class FileManager {
     // Write the file
     String text = json.encode(jsonToSave);
     await F.writeAsString(text);
-    print("Saved: $file");
+    debugPrint("Saved: $file");
   }
 
   static Future<dynamic> loadFromFile(String file) async {
@@ -32,7 +33,7 @@ class FileManager {
 
     String text = await F.readAsString();
     dynamic map = json.decode(text);
-    print("Opened: $file");
+    debugPrint("Opened: $file");
     return map;
   }
 }
