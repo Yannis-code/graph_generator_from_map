@@ -22,7 +22,10 @@ class FloydWarshall {
     List<dynamic> hash = [];
     for (var key in keys) {
       List<String> split = key.split(", ");
-      hash.add([double.parse(split[0]), double.parse(split[1])]);
+      hash.add([
+        graph[key]["options"],
+        [double.parse(split[0]), double.parse(split[1])]
+      ]);
     }
 
     List<dynamic> distances = [];
@@ -46,19 +49,19 @@ class FloydWarshall {
         if (i == j) {
           distances[j][j] = 0;
         } else {
-          if (graph["${hash[i][0]}, ${hash[i][1]}"] != []) {
-            for (var item in graph["${hash[i][0]}, ${hash[i][1]}"]) {
-              int index = hash.indexWhere(
-                  (element) => element[0] == item[0] && element[1] == item[1]);
-              distances[i][index] = item[2];
+          if (graph["${hash[i][1][0]}, ${hash[i][1][1]}"]["connections"] != []) {
+            for (var item in graph["${hash[i][1][0]}, ${hash[i][1][1]}"]["connections"]) {
+              int index = hash.indexWhere((element) =>
+                  element[1][0] == item["point"][0] && element[1][1] == item["point"][1]);
+              distances[i][index] = item["options"]["distance"];
               predecessors[i][index] = i;
             }
           }
-          if (graph["${hash[j][0]}, ${hash[j][1]}"] != []) {
-            for (var item in graph["${hash[j][0]}, ${hash[j][1]}"]) {
-              int index = hash.indexWhere(
-                  (element) => element[0] == item[0] && element[1] == item[1]);
-              distances[index][j] = item[2];
+          if (graph["${hash[j][1][0]}, ${hash[j][1][1]}"]["connections"] != []) {
+            for (var item in graph["${hash[j][1][0]}, ${hash[j][1][1]}"]["connections"]) {
+              int index = hash.indexWhere((element) =>
+                  element[1][0] == item["point"][0] && element[1][1] == item["point"][1]);
+              distances[index][j] = item["options"]["distance"];
               predecessors[index][j] = index;
             }
           }

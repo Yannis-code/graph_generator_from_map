@@ -61,32 +61,29 @@ class _CarteState extends State<Carte> {
     "generic": 0.003,
     "parking": 0.003,
     "door": 0.0015,
+    "stairs": 0.001,
     "classroom": 0.001,
   };
 
   // Déclaration des listes d'objet à afficher sur la map
   List<Polygon> _polygons = [];
-  List<dynamic> _markers = [];
-  List<Marker> _markersList = [];
-  List<Marker> _directionMarkers = [];
-  List<Polyline> _polylines = [];
+
+  Map<String, List<dynamic>> _stages = {
+    "0": [<Polyline>[], <Marker>[], <dynamic>[]],
+    "1": [<Polyline>[], <Marker>[], <dynamic>[]],
+    "2": [<Polyline>[], <Marker>[], <dynamic>[]],
+    "3": [<Polyline>[], <Marker>[], <dynamic>[]],
+  };
   bool _showPolygons = false;
 
   final ValueNotifier<String> _action = ValueNotifier("");
   final ValueNotifier<String> _markerType = ValueNotifier("generic");
   final ValueNotifier<String> _routeType = ValueNotifier("");
+  int _floor = 0;
   TextEditingController markerLabelController = TextEditingController();
 
   late final MapController mapController;
   double rotation = 0.0;
-
-  var overlayImages = <OverlayImage>[
-    OverlayImage(
-        bounds: LatLngBounds(LatLng(51.5, -0.09), LatLng(48.8566, 2.3522)),
-        opacity: 0.8,
-        imageProvider: NetworkImage(
-            'https://images.pexels.com/photos/231009/pexels-photo-231009.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=300&w=600')),
-  ];
 
   Future<void> _buildPolygons() async {
     // Chargement du fichier contenant les informations sur les polygones
@@ -155,10 +152,10 @@ class _CarteState extends State<Carte> {
     return earthRadiusKm * c;
   }
 
-  Marker getClosest(Marker marker, List<Marker> markers) {
-    Marker closest = markers[0];
+  dynamic getClosestMarkers(LatLng latLng, List<dynamic> markers) {
+    dynamic closest = markers[0];
     for (var mark in markers) {
-      if (dist(marker.point, mark.point) < dist(marker.point, closest.point)) {
+      if (dist(latLng, mark[1].point) < dist(latLng, closest[1].point)) {
         closest = mark;
       }
     }
@@ -166,168 +163,138 @@ class _CarteState extends State<Carte> {
   }
 
   Future<void> loadJson() async {
-    List<dynamic> markerss = [];
-    List<Marker> markersGlobal = [];
+    Map<String, List<dynamic>> stages = {
+      "0": [<Polyline>[], <Marker>[], <dynamic>[]],
+      "1": [<Polyline>[], <Marker>[], <dynamic>[]],
+      "2": [<Polyline>[], <Marker>[], <dynamic>[]],
+      "3": [<Polyline>[], <Marker>[], <dynamic>[]],
+    };
 
-    List<Marker> parking =
-        await loadMarkerList(markersGlobal, "parking", "hashParking.json");
-    for (var marker in parking) {
-      markerss.add(["parking", marker, {}]);
-    }
-    List<Marker> door =
-        await loadMarkerList(markersGlobal, "door", "hashDoor.json");
-    for (var marker in door) {
-      markerss.add(["door", marker, {}]);
-    }
-    List<Marker> generic =
-        await loadMarkerList(markersGlobal, "generic", "hashGeneric.json");
-    for (var marker in generic) {
-      markerss.add(["generic", marker, {}]);
-    }
-
-    List<dynamic> loadInside =
-        await FileManager.loadFromFile("hashInsideMarker.json");
-    for (var classroom in loadInside) {
-      LatLng classroomLatLng = LatLng(classroom[0][0], classroom[0][1]);
-      Marker marker = MarkerMaker.makeInside(classroomLatLng);
-      markerss.add([
-        "classroom",
-        marker,
-        {"name": classroom[1]}
-      ]);
-      markersGlobal.add(marker);
-    }
-
-    List<Marker> endMarkers = [];
-    List<Polyline> polylines = [];
     Map<dynamic, dynamic> load = await FileManager.loadFromFile("graph.json");
     for (var key in load.keys) {
       List<String> keyVal = key.split(", ");
-      LatLng loadedLatLng =
+      LatLng startLatLng =
           LatLng(double.parse(keyVal[0]), double.parse(keyVal[1]));
-      for (var connected in load[key]) {
-        LatLng connectedLatLng = LatLng(connected[0], connected[1]);
+
+      Map<String, dynamic> options = load[key]["options"];
+      List<dynamic> connections = load[key]["connections"];
+
+      for (var connection in connections) {
+        Map<String, dynamic> connectionOpt = connection["options"];
+        List<dynamic> connectionData = connection["point"];
+        LatLng endLatLng = LatLng(connectionData[0], connectionData[1]);
         Polyline poly = Polyline(
-          points: [loadedLatLng, connectedLatLng],
+          points: [startLatLng, endLatLng],
           color: Colors.red,
           strokeWidth: 1.5,
         );
-        Marker end = MarkerMaker.makeArrow(loadedLatLng, connectedLatLng);
-        endMarkers.add(end);
-        polylines.add(poly);
+        MarkerMaker.getMarker(startLatLng, options["type"]);
+        stages["${options['floor']}"]?[1]
+            .add(MarkerMaker.makeArrow(startLatLng, endLatLng));
+        stages["${options['floor']}"]?[0].add(poly);
       }
+      Marker marker = MarkerMaker.getMarker(startLatLng, options["type"]);
+      stages["${options['floor']}"]?[2].add([options, marker]);
     }
     setState(() {
-      _markers = markerss;
-      _markersList = markersGlobal;
-      _directionMarkers = endMarkers;
-      _polylines = polylines;
+      _stages = stages;
     });
-  }
-
-  Future<List<Marker>> loadMarkerList(
-      List<dynamic> globalList, String type, String path) async {
-    List<dynamic> data = await FileManager.loadFromFile(path);
-    List<Marker> markers = [];
-    for (var loadedMarker in data) {
-      LatLng latLng = LatLng(loadedMarker[0], loadedMarker[1]);
-      late Marker marker;
-      switch (type) {
-        case "parking":
-          marker = MarkerMaker.makeParkingMarker(latLng);
-          break;
-        case "door":
-          marker = MarkerMaker.makeDoor(latLng);
-          break;
-        default:
-          marker = MarkerMaker.makeMarker(latLng);
-          break;
-      }
-      globalList.add(marker);
-      markers.add(marker);
-    }
-    return markers;
   }
 
   Future<void> saveJson() async {
     Map<String, dynamic> graph = {};
-    Set<List<double>> parkingMarkers = {};
-    Set<List<dynamic>> classroomMarkers = {};
-    Set<List<double>> doorMarkers = {};
-    Set<List<double>> insideMarkers = {};
-    Set<List<double>> outsideMarkers = {};
-    Set<List<double>> allMarkers = {};
-    Set<List<double>> genericMarkers = {};
-    for (var poly in _polylines) {
-      LatLng start = poly.points.first;
-      LatLng end = poly.points.last;
+    Map<String, Set<dynamic>> outputs = {
+      "parking": {},
+      "door": {},
+      "classroom": {},
+      "generic": {},
+      "inside": {},
+      "outside": {},
+      "global": {},
+    };
 
-      String startString = "${start.latitude}, ${start.longitude}";
-      String endString = "${end.latitude}, ${end.longitude}";
-      double distance = dist(start, end);
+    for (var key in _stages.keys) {
+      if (key != "global") {
+        for (var poly in _stages[key]?[0]) {
+          LatLng start = poly.points.first;
+          LatLng end = poly.points.last;
 
-      List<double> value = [end.latitude, end.longitude, distance];
+          var endPoint = _stages[key]?[2].firstWhere((element) {
+            return element[1].point == end;
+          });
 
-      if (!graph.containsKey(startString)) {
-        graph[startString] = [];
-        var matching = _markers.firstWhere((element) {
-          return element[1].point == start;
-        });
-        if (matching[0] == "parking") {
-          parkingMarkers.add([start.latitude, start.longitude]);
-        } else if (matching[0] == "door") {
-          doorMarkers.add([start.latitude, start.longitude]);
-        } else if (matching[0] == "classroom") {
-          classroomMarkers.add([
-            [start.latitude, start.longitude],
-            matching[2]["name"]
-          ]);
-        } else if (matching[0] == "generic") {
-          genericMarkers.add([start.latitude, start.longitude]);
+          String startString = "${start.latitude}, ${start.longitude}";
+          String endString = "${end.latitude}, ${end.longitude}";
+          double distance = dist(start, end);
+
+          Map<String, dynamic> value = {
+            "options": endPoint[0],
+            "point": [end.latitude, end.longitude]
+          };
+          value["options"]["distance"] = distance;
+
+          if (!graph.containsKey(startString)) {
+            graph[startString] = {"options": {}, "connections": []};
+            var matching = _stages[key]?[2].firstWhere((element) {
+              return element[1].point == start;
+            });
+            outputs[matching[0]["type"]]?.add([
+              matching[0],
+              [start.latitude, start.longitude]
+            ]);
+            if (Routing.isInsidePolygons(_polygons, start)) {
+              outputs["inside"]?.add([
+                matching[0],
+                [start.latitude, start.longitude]
+              ]);
+            } else {
+              outputs["outside"]?.add([
+                matching[0],
+                [start.latitude, start.longitude]
+              ]);
+            }
+            graph[startString]["options"] = matching[0];
+            outputs["global"]?.add([
+              matching[0],
+              [start.latitude, start.longitude]
+            ]);
+          }
+          if (!graph.containsKey(endString)) {
+            graph[endString] = {"options": {}, "connections": []};
+            var matching = _stages[key]?[2].firstWhere((element) {
+              return element[1].point == end;
+            });
+            outputs[matching[0]["type"]]?.add([
+              matching[0],
+              [end.latitude, end.longitude]
+            ]);
+            if (Routing.isInsidePolygons(_polygons, end)) {
+              outputs["inside"]?.add([
+                matching[0],
+                [end.latitude, end.longitude]
+              ]);
+            } else {
+              outputs["outside"]?.add([
+                matching[0],
+                [end.latitude, end.longitude]
+              ]);
+            }
+            graph[endString]["options"] = matching[0];
+            outputs["global"]?.add([
+              matching[0],
+              [end.latitude, end.longitude]
+            ]);
+          }
+          if (!graph[startString]["connections"].contains(value)) {
+            graph[startString]["connections"].add(value);
+          }
         }
-        if (Routing.isInsidePolygons(_polygons, start)) {
-          insideMarkers.add([start.latitude, start.longitude]);
-        } else {
-          outsideMarkers.add([start.latitude, start.longitude]);
-        }
-        allMarkers.add([start.latitude, start.longitude]);
-      }
-      if (!graph.containsKey(endString)) {
-        graph[endString] = [];
-        var matching = _markers.firstWhere((element) {
-          return element[1].point == end;
-        });
-        if (matching[0] == "parking") {
-          parkingMarkers.add([end.latitude, end.longitude]);
-        } else if (matching[0] == "door") {
-          doorMarkers.add([end.latitude, end.longitude]);
-        } else if (matching[0] == "classroom") {
-          classroomMarkers.add([
-            [end.latitude, end.longitude],
-            matching[2]["name"]
-          ]);
-        } else if (matching[0] == "generic") {
-          genericMarkers.add([end.latitude, end.longitude]);
-        }
-        if (Routing.isInsidePolygons(_polygons, end)) {
-          insideMarkers.add([end.latitude, end.longitude]);
-        } else {
-          outsideMarkers.add([end.latitude, end.longitude]);
-        }
-        allMarkers.add([end.latitude, end.longitude]);
-      }
-      if (!graph[startString].contains(value)) {
-        graph[startString].add(value);
       }
     }
-    await FileManager.writeToFile("hashInside.json", insideMarkers.toList());
-    await FileManager.writeToFile("hashOutside.json", outsideMarkers.toList());
-    await FileManager.writeToFile("hashParking.json", parkingMarkers.toList());
-    await FileManager.writeToFile("hashGeneric.json", genericMarkers.toList());
-    await FileManager.writeToFile(
-        "hashInsideMarker.json", classroomMarkers.toList());
-    await FileManager.writeToFile("hashDoor.json", doorMarkers.toList());
-    await FileManager.writeToFile("hashGlobal.json", allMarkers.toList());
+
+    for (var key in outputs.keys) {
+      await FileManager.writeToFile("hash_$key.json", outputs[key]?.toList());
+    }
     await FileManager.writeToFile("graph.json", graph);
   }
 
@@ -348,16 +315,17 @@ class _CarteState extends State<Carte> {
   void _handleClick(TapPosition tapPos, LatLng latLong) {
     print(latLong);
     if (_action.value == "marker") {
-      bool markerAdded = !_markers.any((element) {
-        return element[0] == _markerType.value &&
+      bool markerAdded = !_stages["$_floor"]?[2].any((element) {
+        return element[0]["type"] == _markerType.value &&
             dist(latLong, element[1].point) < minSpaceMap[_markerType.value];
       });
 
-      
       if (markerAdded) {
         bool labelSet = true;
         late Marker marker;
         Map options = {};
+        options["floor"] = _floor;
+        options["type"] = _markerType.value;
         if (_markerType.value == "parking") {
           marker = MarkerMaker.makeParkingMarker(latLong);
         } else if (_markerType.value == "door") {
@@ -368,14 +336,16 @@ class _CarteState extends State<Carte> {
             labelSet = false;
           }
           marker = MarkerMaker.makeInside(latLong);
-          options = {"name": markerLabelController.text};
+          options["name"] = markerLabelController.text;
+        } else if (_markerType.value == "stairs") {
+          marker = MarkerMaker.makeStairs(latLong);
         } else if (_markerType.value == "generic") {
           marker = MarkerMaker.makeMarker(latLong);
         }
+
         if (labelSet) {
           setState(() {
-            _markersList.add(marker);
-            _markers.add([_markerType.value, marker, options]);
+            _stages["$_floor"]?[2].add([options, marker]);
           });
         }
       } else {
@@ -383,17 +353,18 @@ class _CarteState extends State<Carte> {
             "Marker of type '${_markerType.value}' too from $latLong (<${minSpaceMap[_markerType.value] * 1000}m)");
       }
     } else if (_action.value == "route") {
-      if (_polylines.isNotEmpty && _polylines.last.points.length < 2) {
-        if (_markersList.isNotEmpty) {
-          Marker test = MarkerMaker.makeMarker(latLong);
-          Marker closest = getClosest(test, _markersList);
-          if (dist(closest.point, latLong) < minSpaceMap["generic"]) {
-            LatLng pt1 = _polylines.last.points.first;
-            LatLng pt2 = closest.point;
+      if (_stages["$_floor"]?[0].isNotEmpty &&
+          _stages["$_floor"]?[0].last.points.length < 2) {
+        if (_stages["$_floor"]?[2].isNotEmpty) {
+          dynamic closest = getClosestMarkers(latLong, _stages["$_floor"]?[2]);
+          if (dist(closest[1].point, latLong) <
+              minSpaceMap[closest[0]["type"]]) {
+            LatLng pt1 = _stages["$_floor"]?[0].last.points.first;
+            LatLng pt2 = closest[1].point;
             Marker end = MarkerMaker.makeArrow(pt1, pt2);
 
-            if (_polylines.last.points.first == pt2) {
-              _polylines.removeLast();
+            if (pt1 == pt2) {
+              _stages["$_floor"]?[0].removeLast();
             } else {
               late Polyline poly;
               late Marker end2;
@@ -407,71 +378,53 @@ class _CarteState extends State<Carte> {
               }
 
               setState(() {
-                _polylines.last.points.add(pt2);
-                _directionMarkers.add(end);
+                _stages["$_floor"]?[0].last.points.add(pt2);
+                _stages["$_floor"]?[1].add(end);
                 if (_routeType.value != "oriented") {
-                  _polylines.add(poly);
-                  _directionMarkers.add(end2);
+                  _stages["$_floor"]?[0].add(poly);
+                  _stages["$_floor"]?[1].add(end2);
                 }
               });
             }
           }
         }
       } else {
-        if (_markersList.isNotEmpty) {
-          Marker test = MarkerMaker.makeMarker(latLong);
-          Marker closest = getClosest(test, _markersList);
-          if (dist(closest.point, latLong) < minSpaceMap["generic"]) {
+        if (_stages["$_floor"]?[2].isNotEmpty) {
+          dynamic closest = getClosestMarkers(latLong, _stages["$_floor"]?[2]);
+          if (dist(closest[1].point, latLong) <
+              minSpaceMap[closest[0]["type"]]) {
             Polyline poly = Polyline(
-              points: [closest.point],
+              points: [closest[1].point],
               color: Colors.red,
               strokeWidth: 1.5,
             );
             setState(() {
-              _polylines.add(poly);
+              _stages["$_floor"]?[0].add(poly);
             });
           }
         }
       }
     } else if (_action.value == "delete") {
-      Marker marker = MarkerMaker.makeMarker(latLong);
-      var closest = _markers.firstWhere(
-        (element) {
-          return dist(latLong, element[1].point) < 0.003;
-        },
-        orElse: () => [],
-      );
-      if (closest != []) {
-        setState(() {
-          _markersList.removeWhere((element) {
-            return element.point == closest[1].point;
-          });
-          _markers.removeWhere((element) => element == closest);
-        });
-      }
-      if (closest != []) {
+      dynamic closest = getClosestMarkers(latLong, _stages["$_floor"]?[2]);
+      if (dist(latLong, closest[1].point) < minSpaceMap[closest[0]["type"]]) {
         List<Polyline> polyToRemove = [];
-        Marker closestMarker = closest[1];
-        for (var poly in _polylines) {
-          if (poly.points[0] == closestMarker.point) {
+        for (var poly in _stages["$_floor"]?[0]) {
+          if (poly.points[0] == closest[1].point) {
             polyToRemove.add(poly);
-            _directionMarkers.removeWhere((element) =>
-                element.point ==
+            _stages["$_floor"]?[1].remove(
                 MarkerMaker.getArrowPos(poly.points[0], poly.points[1]));
-          } else if (poly.points[1] == closestMarker.point) {
+          } else if (poly.points[1] == closest[1].point) {
             polyToRemove.add(poly);
-            _directionMarkers.removeWhere((element) =>
-                element.point ==
+            _stages["$_floor"]?[1].remove(
                 MarkerMaker.getArrowPos(poly.points[0], poly.points[1]));
           }
         }
         for (var poly in polyToRemove) {
-          _polylines.remove(poly);
+          _stages["$_floor"]?[0].remove(poly);
         }
         setState(() {
-          _polylines;
-          _markersList;
-          _markers;
+          _stages["$_floor"]?[2].remove(closest);
+          _stages["$_floor"]?[2].removeWhere((element) => element == closest);
         });
       }
     }
@@ -489,30 +442,67 @@ class _CarteState extends State<Carte> {
           Positioned(
               top: 20,
               left: 20,
-              child: Container(
-                color: const Color.fromARGB(220, 255, 255, 255),
-                child: Row(
-                  children: [
-                    Switch(
-                      value: _showPolygons,
-                      onChanged: (val) {
-                        setState(() {
-                          _showPolygons = val;
-                        });
-                      },
-                    ),
-                    const Padding(
-                      padding: EdgeInsets.all(5),
-                      child: Text(
-                        "Afficher les bâtiments",
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 10,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    color: const Color.fromARGB(220, 255, 255, 255),
+                    child: Row(
+                      children: [
+                        Switch(
+                          value: _showPolygons,
+                          onChanged: (val) {
+                            setState(() {
+                              _showPolygons = val;
+                            });
+                          },
                         ),
-                      ),
+                        const Padding(
+                          padding: EdgeInsets.all(5),
+                          child: Text(
+                            "Afficher les bâtiments",
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 10,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                  Container(
+                    color: const Color.fromARGB(220, 255, 255, 255),
+                    child: Row(
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.all(5),
+                          child: Text(
+                            "Etage affiché",
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 10,
+                            ),
+                          ),
+                        ),
+                        DropdownButton<int>(
+                            value: _floor,
+                            items: <int>[0, 1, 2, 3, 4]
+                                .map<DropdownMenuItem<int>>((int val) {
+                              return DropdownMenuItem<int>(
+                                value: val,
+                                child: Text("$val"),
+                              );
+                            }).toList(),
+                            onChanged: (int? newVal) {
+                              setState(() {
+                                _floor = newVal ?? _floor;
+                              });
+                              ;
+                            }),
+                      ],
+                    ),
+                  ),
+                ],
               )),
           Positioned(
             bottom: 10,
@@ -526,7 +516,7 @@ class _CarteState extends State<Carte> {
                   child: FloatingActionButton.extended(
                     onPressed: () {
                       if (_action.value == "marker") {
-                        _markerType.value = "";
+                        _markerType.value = "generic";
                       }
                       _action.value = _action.value == "marker" ? "" : "marker";
                     },
@@ -625,6 +615,19 @@ class _CarteState extends State<Carte> {
                                         : "door";
                               },
                               label: const Text("Marker de Portes")),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.all(5),
+                          child: FloatingActionButton.extended(
+                              backgroundColor: Colors.red,
+                              icon: const Icon(Icons.stairs),
+                              onPressed: () {
+                                _markerType.value =
+                                    (_markerType.value == "stairs")
+                                        ? "generic"
+                                        : "stairs";
+                              },
+                              label: const Text("Marker d'escalier")),
                         ),
                         Padding(
                           padding: const EdgeInsets.all(5),
@@ -843,17 +846,12 @@ class _CarteState extends State<Carte> {
       ),
       children: [
         tileLayer(),
-        //info(),
+        if (false) info(),
         if (_showPolygons) polygonLayer(),
         alainDelpuch(),
         polylineLayer(),
         endMarkerLayer(),
         markerLayer(),
-        OverlayImageLayerWidget(
-          options: OverlayImageLayerOptions(
-            overlayImages: overlayImages,
-          ),
-        )
       ],
     );
   }
@@ -873,14 +871,14 @@ class _CarteState extends State<Carte> {
     return TileLayerWidget(
         options: TileLayerOptions(
       tileSize: 256,
-      minZoom: 20,
+      minZoom: 20.5,
       maxZoom: 23,
       urlTemplate: "https://perso.isima.fr/~yaroche1/tiles/{z}_{x}_{y}.png",
       backgroundColor: Colors.transparent,
     ));
   }
 
-  /* Widget info() {
+  Widget info() {
     return TileLayerWidget(
         options: TileLayerOptions(
             tileSize: 250,
@@ -893,31 +891,30 @@ class _CarteState extends State<Carte> {
               return Container(
                 decoration: BoxDecoration(
                     border: Border.all(color: Colors.red, width: 1.0)),
-                child: Text("${tile.coords.z},   ${tile.coords.x},   ${tile.coords.y}"),
+                child: Text(
+                    "${tile.coords.z},   ${tile.coords.x},   ${tile.coords.y}"),
               );
             }));
-  } */
+  }
 
   // Construction du Widget correspondant aux polylines de la carte
   Widget polylineLayer() {
     return PolylineLayerWidget(
-      options: PolylineLayerOptions(
-        polylines: _polylines,
-      ),
+      options: PolylineLayerOptions(polylines: _stages["$_floor"]?[0]),
     );
   }
 
   Widget markerLayer() {
     return MarkerLayerWidget(
         options: MarkerLayerOptions(
-      markers: _markersList,
+      markers: _stages["$_floor"]?[2].map<Marker>((e) => e[1] as Marker).toList(),
     ));
   }
 
   Widget endMarkerLayer() {
     return MarkerLayerWidget(
         options: MarkerLayerOptions(
-      markers: _directionMarkers,
+      markers: _stages["$_floor"]?[1],
     ));
   }
 
