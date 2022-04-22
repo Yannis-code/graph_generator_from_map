@@ -26,6 +26,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:path_generator/floyd_warshall.dart';
 import 'package:path_generator/routing_service.dart';
 import 'package:path_generator/widgets/markers.dart';
+import 'package:path_generator/widgets/searchField.dart';
 import 'package:positioned_tap_detector_2/positioned_tap_detector_2.dart';
 import 'package:path_generator/file_manager.dart';
 
@@ -58,7 +59,8 @@ class _CarteState extends State<Carte> {
     "stairs": 0.001,
     "classroom": 0.001,
   };
-
+  List<String> classroomList = [];
+  final TextEditingController searchController = TextEditingController();
   // Déclaration des listes d'objet à afficher sur la map
   List<Polygon> _polygons = [];
 
@@ -66,11 +68,8 @@ class _CarteState extends State<Carte> {
 
   Map<String, dynamic> _stages = {
     "0": {"polylines": <dynamic>[], "markers": <dynamic>[]},
-    "0.5": {"polylines": <dynamic>[], "markers": <dynamic>[]},
     "1": {"polylines": <dynamic>[], "markers": <dynamic>[]},
-    "1.5": {"polylines": <dynamic>[], "markers": <dynamic>[]},
     "2": {"polylines": <dynamic>[], "markers": <dynamic>[]},
-    "2.5": {"polylines": <dynamic>[], "markers": <dynamic>[]},
     "3": {"polylines": <dynamic>[], "markers": <dynamic>[]},
   };
   bool _showPolygons = false;
@@ -79,7 +78,6 @@ class _CarteState extends State<Carte> {
   final ValueNotifier<String> _markerType = ValueNotifier("generic");
   final ValueNotifier<String> _routeType = ValueNotifier("");
   int _floor = 0;
-  TextEditingController markerLabelController = TextEditingController();
 
   late final MapController mapController;
   double rotation = 0.0;
@@ -162,14 +160,33 @@ class _CarteState extends State<Carte> {
     return closest;
   }
 
+  dynamic getClosestStairsSup(LatLng latLng, List<dynamic> markers) {
+    dynamic closest = markers
+        .firstWhere((e) => e["options"]["type"] == "stairs", orElse: () => []);
+    for (var mark in markers) {
+      if (mark["options"]["type"] == "stairs" &&
+          dist(latLng, mark["marker"].point) <
+              dist(latLng, closest["marker"].point)) {
+        closest = mark;
+      }
+    }
+    return closest;
+  }
+
+  Future<void> loadClassroomList() async {
+    final String response =
+        await rootBundle.loadString('assets/classroomList.json');
+    List<String> load = List.castFrom(await json.decode(response));
+    setState(() {
+      classroomList = load;
+    });
+  }
+
   Future<void> loadJson() async {
     Map<String, dynamic> stages = {
       "0": {"polylines": <dynamic>[], "markers": <dynamic>[]},
-      "0.5": {"polylines": <dynamic>[], "markers": <dynamic>[]},
       "1": {"polylines": <dynamic>[], "markers": <dynamic>[]},
-      "1.5": {"polylines": <dynamic>[], "markers": <dynamic>[]},
       "2": {"polylines": <dynamic>[], "markers": <dynamic>[]},
-      "2.5": {"polylines": <dynamic>[], "markers": <dynamic>[]},
       "3": {"polylines": <dynamic>[], "markers": <dynamic>[]},
     };
 
@@ -192,12 +209,16 @@ class _CarteState extends State<Carte> {
           strokeWidth: 1.5,
         );
 
-        Map<String, dynamic> polyOptions = {"type": ""};
-        if (options["type"] == "stairs" && connectionOpt["type"] == "stairs") {
-          polyOptions["type"] = "stairs";
-        }
+        Map<String, dynamic> polyOptions = {
+          "startType": options["type"],
+          "endType": connectionOpt["type"],
+          "type":
+              options["type"] == connectionOpt["type"] ? options["type"] : ""
+        };
 
-        stages["${options['floor']}"]?["polylines"].add({
+        stages["${min(options['floor'] as int, connectionOpt["floor"] as int)}"]
+                ?["polylines"]
+            .add({
           "polyline": poly,
           "pointer": MarkerMaker.makeArrow(startLatLng, endLatLng),
           "options": polyOptions,
@@ -233,7 +254,14 @@ class _CarteState extends State<Carte> {
 
           var endPoint = _stages[key]?["markers"].firstWhere((element) {
             return element["marker"].point == end;
-          });
+          }, orElse: () => {});
+          if (endPoint.isEmpty) {
+            endPoint = _stages["${int.parse(key) + 1}"]?["markers"]
+                .firstWhere((element) {
+              return element["marker"].point == end &&
+                  element["options"]["type"] == "stairs";
+            });
+          }
 
           String startString = "${start.latitude}, ${start.longitude}";
           String endString = "${end.latitude}, ${end.longitude}";
@@ -249,7 +277,14 @@ class _CarteState extends State<Carte> {
             graph[startString] = {"options": {}, "connections": []};
             var matching = _stages[key]?["markers"].firstWhere((element) {
               return element["marker"].point == start;
-            });
+            }, orElse: () => {});
+            if (matching.isEmpty) {
+              matching = _stages["${int.parse(key) + 1}"]?["markers"]
+                  .firstWhere((element) {
+                return element["marker"].point == end &&
+                    element["options"]["type"] == "stairs";
+              });
+            }
             outputs[matching["options"]["type"]]?.add([
               matching["options"],
               [start.latitude, start.longitude]
@@ -275,7 +310,14 @@ class _CarteState extends State<Carte> {
             graph[endString] = {"options": {}, "connections": []};
             var matching = _stages[key]?["markers"].firstWhere((element) {
               return element["marker"].point == end;
-            });
+            }, orElse: () => {});
+            if (matching.isEmpty) {
+              matching = _stages["${int.parse(key) + 1}"]?["markers"]
+                  .firstWhere((element) {
+                return element["marker"].point == end &&
+                    element["options"]["type"] == "stairs";
+              });
+            }
             outputs[matching["options"]["type"]]?.add([
               matching["options"],
               [end.latitude, end.longitude]
@@ -315,6 +357,7 @@ class _CarteState extends State<Carte> {
   void initState() {
     super.initState();
     _buildPolygons();
+    loadClassroomList();
     mapController = MapController();
     currentPoly = {
       "polyline": Polyline(
@@ -335,10 +378,9 @@ class _CarteState extends State<Carte> {
   void _handleClick(TapPosition tapPos, LatLng latLong) {
     if (_action.value == "marker") {
       // TODO: Tester si le marker est un escalier et alors:
-      //    - qu'il soit possible de target un escalier (uniquement) de niv +0.5 +1
+      //    - qu'il soit possible de target un escalier (uniquement) de niv +1
       //    - puis créer le polyline à la couche actuelle
       //    - l'escalier doit alors avoir un float associé indiquant sont z
-      //    - niveaux en 0.5 vraiment necessaires?
       bool markerAdded = !_stages["$_floor"]?["markers"].any((element) {
         return element["options"]["type"] == _markerType.value &&
             dist(latLong, element["marker"].point) <
@@ -353,11 +395,11 @@ class _CarteState extends State<Carte> {
         options["type"] = _markerType.value;
         marker = MarkerMaker.getMarker(latLong, _markerType.value);
         if (_markerType.value == "classroom") {
-          if (markerLabelController.text == "") {
-            debugPrint("Classroom name can not be empty");
+          if (!checkValidity(searchController.text, classroomList)) {
+            debugPrint("Classroom name invalid");
             labelSet = false;
           } else {
-            options["name"] = markerLabelController.text;
+            options["name"] = searchController.text;
           }
         }
 
@@ -376,6 +418,15 @@ class _CarteState extends State<Carte> {
         if (_stages["$_floor"]?["markers"].isNotEmpty) {
           dynamic closest =
               getClosestMarkers(latLong, _stages["$_floor"]?["markers"]);
+          if (_floor < 3) {
+            dynamic closestStairsSup = getClosestStairsSup(
+                latLong, _stages["${_floor + 1}"]?["markers"]);
+            if (closestStairsSup.isNotEmpty &&
+                dist(latLong, closestStairsSup["marker"].point) <
+                    dist(latLong, closest["marker"].point)) {
+              closest = closestStairsSup;
+            }
+          }
           if (dist(closest["marker"].point, latLong) <
               minSpaceMap[closest["options"]["type"]]) {
             LatLng pt1 = currentPoly["polyline"].points.first;
@@ -394,22 +445,38 @@ class _CarteState extends State<Carte> {
               }
               currentPoly["polyline"].points.add(pt2);
               Marker pointer = MarkerMaker.makeArrow(pt1, pt2);
-              Map<String, dynamic> options = {"type": ""};
-              if (currentPoly["options"]["type"] == "stairs" &&
-                  closest["options"]["type"] == "stairs") {
-                options["type"] = "stairs";
-              }
+
+              Map<String, dynamic> optionsPoly1 = {
+                "startType": currentPoly["options"]["startType"],
+                "endType": closest["options"]["type"],
+                "type": currentPoly["options"]["startType"] ==
+                        closest["options"]["type"]
+                    ? closest["options"]["type"]
+                    : ""
+              };
+
+              Map<String, dynamic> optionsPoly2 = {
+                "startType": closest["options"]["type"],
+                "endType": currentPoly["options"]["startType"],
+                "type": currentPoly["options"]["startType"] ==
+                        closest["options"]["type"]
+                    ? closest["options"]["type"]
+                    : ""
+              };
 
               setState(() {
                 currentPoly;
                 _stages["$_floor"]?["polylines"].add({
                   "polyline": currentPoly["polyline"],
-                  "options": options,
+                  "options": optionsPoly1,
                   "pointer": pointer
                 });
                 if (_routeType.value != "oriented") {
-                  _stages["$_floor"]?["polylines"].add(
-                      {"polyline": poly, "options": options, "pointer": end2});
+                  _stages["$_floor"]?["polylines"].add({
+                    "polyline": poly,
+                    "options": optionsPoly2,
+                    "pointer": end2
+                  });
                 }
               });
             }
@@ -427,23 +494,43 @@ class _CarteState extends State<Carte> {
         if (_stages["$_floor"]?["markers"].isNotEmpty) {
           dynamic closest =
               getClosestMarkers(latLong, _stages["$_floor"]?["markers"]);
+          if (_floor < 3) {
+            dynamic closestStairsSup = getClosestStairsSup(
+                latLong, _stages["${_floor + 1}"]?["markers"]);
+            if (closestStairsSup.isNotEmpty &&
+                dist(latLong, closestStairsSup["marker"].point) <
+                    dist(latLong, closest["marker"].point)) {
+              closest = closestStairsSup;
+            }
+          }
           if (dist(closest["marker"].point, latLong) <
               minSpaceMap[closest["options"]["type"]]) {
             currentPoly["polyline"].points.add(closest["marker"].point);
-            currentPoly["options"] = closest["options"];
+            currentPoly["options"]["startType"] = closest["options"]["type"];
           }
         }
       }
     } else if (_action.value == "delete") {
+      bool hasSupMatching = false;
       dynamic closest =
           getClosestMarkers(latLong, _stages["$_floor"]?["markers"]);
+      if (_floor < 3) {
+        dynamic closestStairsSup =
+            getClosestStairsSup(latLong, _stages["${_floor + 1}"]?["markers"]);
+        if (closestStairsSup.isNotEmpty &&
+            dist(latLong, closestStairsSup["marker"].point) <
+                dist(latLong, closest["marker"].point)) {
+          closest = closestStairsSup;
+        }
+      }
+
       if (dist(latLong, closest["marker"].point) <
           minSpaceMap[closest["options"]["type"]]) {
         List<dynamic> polyToRemove = [];
         for (var poly in _stages["$_floor"]?["polylines"]) {
-          if (poly["polyline"].points[0] == closest["marker"].point) {
+          if (poly["polyline"].points.first == closest["marker"].point) {
             polyToRemove.add(poly);
-          } else if (poly["polyline"].points[1] == closest["marker"].point) {
+          } else if (poly["polyline"].points.last == closest["marker"].point) {
             polyToRemove.add(poly);
           }
         }
@@ -453,6 +540,43 @@ class _CarteState extends State<Carte> {
         setState(() {
           _stages["$_floor"]?["markers"].remove(closest);
         });
+        if (_floor > 0) {
+          List<dynamic> polyToRemove = [];
+          for (var poly in _stages["${_floor - 1}"]?["polylines"]) {
+            if (poly["polyline"].points.first == closest["marker"].point &&
+                poly["options"]["startType"] == "stairs") {
+              polyToRemove.add(poly);
+            } else if (poly["polyline"].points.last ==
+                    closest["marker"].point &&
+                poly["options"]["endType"] == "stairs") {
+              polyToRemove.add(poly);
+            }
+          }
+          for (var poly in polyToRemove) {
+            _stages["${_floor - 1}"]?["polylines"].remove(poly);
+          }
+          setState(() {
+            _stages["${_floor - 1}"]?["markers"].remove(closest);
+          });
+        }
+        if (_floor < 3) {
+          List<dynamic> polyToRemove = [];
+          for (var poly in _stages["${_floor + 1}"]?["polylines"]) {
+            if (poly["polyline"].points.first == closest["marker"].point &&
+                poly["options"]["startType"] == "stairs") {
+              polyToRemove.add(poly);
+            } else if (poly["polyline"].points.end == closest["marker"].point &&
+                poly["options"]["endType"] == "stairs") {
+              polyToRemove.add(poly);
+            }
+          }
+          for (var poly in polyToRemove) {
+            _stages["${_floor + 1}"]?["polylines"].remove(poly);
+          }
+          setState(() {
+            _stages["${_floor + 1}"]?["markers"].remove(closest);
+          });
+        }
       }
     }
   }
@@ -731,35 +855,7 @@ class _CarteState extends State<Carte> {
                     return SizedBox(
                       width: 400,
                       height: 50,
-                      child: TextField(
-                        controller: markerLabelController,
-                        decoration: InputDecoration(
-                          contentPadding: const EdgeInsets.symmetric(
-                            vertical: 15.0,
-                          ),
-                          fillColor: Colors.white,
-                          filled: true,
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(30.0),
-                              borderSide: const BorderSide(width: 1.5)),
-                          enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(30.0),
-                              borderSide: BorderSide(
-                                width: 1.5,
-                                color: Theme.of(context).primaryColor,
-                              )),
-                          prefixIcon: const Icon(
-                            Icons.abc,
-                            size: 30,
-                          ),
-                          suffixIcon: IconButton(
-                            icon: const Icon(Icons.cancel),
-                            onPressed: () {
-                              markerLabelController.text = "";
-                            },
-                          ),
-                        ),
-                      ),
+                      child: searchField(searchController, classroomList),
                     );
                   }
                   return const SizedBox();
@@ -908,10 +1004,6 @@ class _CarteState extends State<Carte> {
         .map<Polyline>((e) => e["polyline"] as Polyline)
         .toList();
     if (_floor < 3) {
-      polylines += _stages["${_floor + 0.5}"]?["polylines"]
-          .where((e) => e["options"]["type"] == "stairs")
-          .map<Polyline>((e) => e["polyline"] as Polyline)
-          .toList();
       polylines += _stages["${_floor + 1}"]?["polylines"]
           .where((e) => e["options"]["type"] == "stairs")
           .map<Polyline>((e) => e["polyline"] as Polyline)
@@ -932,10 +1024,6 @@ class _CarteState extends State<Carte> {
         .map<Marker>((e) => e["marker"] as Marker)
         .toList();
     if (_floor < 3) {
-      markers += _stages["${_floor + 0.5}"]?["markers"]
-          .where((e) => e["options"]["type"] == "stairs")
-          .map<Marker>((e) => e["marker"] as Marker)
-          .toList();
       markers += _stages["${_floor + 1}"]?["markers"]
           .where((e) => e["options"]["type"] == "stairs")
           .map<Marker>((e) => e["marker"] as Marker)
@@ -954,10 +1042,6 @@ class _CarteState extends State<Carte> {
         .map<Marker>((e) => e["pointer"] as Marker)
         .toList();
     if (_floor < 3) {
-      pointers += _stages["${_floor + 0.5}"]?["polylines"]
-          .where((e) => e["options"]["type"] == "stairs")
-          .map<Marker>((e) => e["pointer"] as Marker)
-          .toList();
       pointers += _stages["${_floor + 1}"]?["polylines"]
           .where((e) => e["options"]["type"] == "stairs")
           .map<Marker>((e) => e["pointer"] as Marker)

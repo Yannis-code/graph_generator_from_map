@@ -34,6 +34,8 @@ dependencies:
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.2
+  fuzzywuzzy: ^0.1.7
+  flutter_typeahead: ^3.2.5
 
 dev_dependencies:
   flutter_test:
@@ -72,6 +74,7 @@ flutter:
     - buildingData.geoJSON
     - test.geojson
     - test.png
+    - classroomList.json
     #- assets/out/
 
   # An image asset can refer to one or more resolution-specific "variants", see
