@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:path_generator/maps.dart';
+import 'package:path_generator/view/maps.dart';
 
 void main() {
   runApp(const MyApp());

@@ -1,6 +1,5 @@
 import 'dart:math';
 
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:fuzzywuzzy/fuzzywuzzy.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
